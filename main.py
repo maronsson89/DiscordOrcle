@@ -1,180 +1,279 @@
 # main.py
-# A Discord bot that searches the Archives of Nethys for Pathfinder 2e items.
-# This version is simplified for professional hosting (e.g., Render, Heroku).
+# A Discord bot that searches the Archives of Nethys using their Elasticsearch API
+# This is much more reliable than web scraping!
 
 import discord
 import os
 import requests
-from bs4 import BeautifulSoup
-import urllib.parse
+import json
+import logging
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # --- CONFIGURATION ---
-# The bot will read its token from a secure environment variable.
 try:
-    # On Render, you will set an environment variable named 'DiscordOracle'.
     TOKEN = os.getenv('DiscordOracle')
     if TOKEN is None:
-        print("[ERROR] DiscordOracle environment variable not set.")
-        print("Please set this in your hosting platform's dashboard.")
+        logger.error("DiscordOracle environment variable not set.")
         exit()
+    logger.info("Token loaded successfully")
 except Exception as e:
-    print(f"[ERROR] Error reading environment variable: {e}")
+    logger.error(f"Error reading environment variable: {e}")
     exit()
 
-# The command prefix the bot will listen for.
 COMMAND_PREFIX = "!aon"
 
-# Base URL for Archives of Nethys searches.
-AON_BASE_URL = "https://2e.aonprd.com/"
+# Archives of Nethys Elasticsearch API
+AON_API_BASE = "https://elasticsearch.aonprd.com/aon/_search"
+AON_WEB_BASE = "https://2e.aonprd.com/"
 
 # --- BOT SETUP ---
-
-# To read message content, we need to enable the specific intent.
 intents = discord.Intents.default()
 intents.message_content = True
-
 client = discord.Client(intents=intents)
 
-def search_archives_of_nethys(query: str):
+def search_aon_api(query: str, result_limit: int = 5):
     """
-    Searches Archives of Nethys for a given query, scrapes the first result,
-    and returns its details.
-
+    Search Archives of Nethys using their Elasticsearch API.
+    
     Args:
-        query (str): The search term (e.g., "Healing Potion").
-
+        query (str): Search term
+        result_limit (int): Number of results to return
+    
     Returns:
-        dict: A dictionary containing the item's 'name', 'url', and 'description'.
-              Returns None if the item is not found or an error occurs.
+        list: List of search results
     """
-    print(f"[DEBUG] Starting search for: {query}")
+    logger.info(f"Searching API for: {query}")
+    
     try:
-        # 1. Perform the initial search to find the item's page URL.
-        # We URL-encode the query to handle spaces and special characters.
-        search_query = urllib.parse.quote_plus(query)
-        search_url = f"{AON_BASE_URL}Search.aspx?q={search_query}"
-        print(f"[DEBUG] Search URL: {search_url}")
-
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36'}
-
-        search_response = requests.get(search_url, headers=headers, timeout=10)
-        search_response.raise_for_status() # Will raise an exception for 4XX/5XX status codes
-        print(f"[DEBUG] Search response status: {search_response.status_code}")
-
-        # 2. Parse the search results page to find the first valid link.
-        soup = BeautifulSoup(search_response.content, 'html.parser')
-        
-        # This selector looks for an <a> tag that is a child of an <li>
-        # which is a child of a <ul class="compact"> that is a sibling of an <h1 class="title">
-        # and where the href attribute starts with "Equipment.aspx"
-        result_link_element = soup.select_one('h1.title + ul.compact li a[href^="Equipment.aspx"]')
-        print(f"[DEBUG] result_link_element found: {result_link_element is not None}")
-
-        if not result_link_element:
-            print("[DEBUG] No matching equipment link found on search results page with current selector.")
-            # Optionally uncomment to print a snippet of the HTML if the link element is not found
-            # print(f"[DEBUG] Search results HTML snippet (first 1000 chars): {soup.prettify()[:1000]}") 
-            return None
-
-        item_page_url = AON_BASE_URL + result_link_element['href']
-        print(f"[DEBUG] Item page URL: {item_page_url}")
-        
-        # 3. Scrape the actual item page.
-        item_response = requests.get(item_page_url, headers=headers, timeout=10)
-        item_response.raise_for_status()
-        print(f"[DEBUG] Item page response status: {item_response.status_code}")
-        
-        item_soup = BeautifulSoup(item_response.content, 'html.parser')
-
-        # 4. Extract the relevant information from the item page.
-        item_name_element = item_soup.find('h1', class_='title') 
-        if not item_name_element:
-            print("[DEBUG] Could not find item name element (h1 with class 'title') on the item page.")
-            return None
-        item_name = item_name_element.get_text(strip=True)
-        print(f"[DEBUG] Item Name: {item_name}")
-
-        main_content = item_soup.find('span', id='ctl00_MainContent_DetailedOutput')
-        print(f"[DEBUG] Main content block found (span with id 'ctl00_MainContent_DetailedOutput'): {main_content is not None}")
-        
-        if not main_content:
-            print("[DEBUG] Could not find the main content block on the item page.")
-            return None
-        
-        # Replace <br> tags with newlines for better readability in Discord
-        for br in main_content.find_all("br"):
-            br.replace_with("\n")
-        
-        description = main_content.get_text(separator=' ', strip=True)
-
-        # Truncate description if it's too long for a Discord embed (max 4096 characters)
-        if len(description) > 4000: # Keeping a buffer for truncation message
-            description = description[:4000] + "\n\n... (description truncated)"
-            
-        return {
-            'name': item_name,
-            'url': item_page_url,
-            'description': description
+        # Elasticsearch query structure
+        search_body = {
+            "query": {
+                "bool": {
+                    "should": [
+                        {
+                            "multi_match": {
+                                "query": query,
+                                "fields": ["name^3", "text^2", "trait_raw^2"],
+                                "type": "best_fields",
+                                "fuzziness": "AUTO"
+                            }
+                        },
+                        {
+                            "wildcard": {
+                                "name.keyword": f"*{query.lower()}*"
+                            }
+                        }
+                    ],
+                    "minimum_should_match": 1
+                }
+            },
+            "size": result_limit,
+            "_source": ["name", "type", "url", "text", "level", "price", "category", "source"],
+            "sort": [
+                {"_score": {"order": "desc"}},
+                {"name.keyword": {"order": "asc"}}
+            ]
         }
-
+        
+        headers = {
+            'Content-Type': 'application/json',
+            'User-Agent': 'DiscordBot-AON-Search/1.0'
+        }
+        
+        response = requests.post(
+            AON_API_BASE,
+            headers=headers,
+            data=json.dumps(search_body),
+            timeout=10
+        )
+        
+        response.raise_for_status()
+        data = response.json()
+        
+        results = []
+        if 'hits' in data and 'hits' in data['hits']:
+            for hit in data['hits']['hits']:
+                source = hit['_source']
+                
+                # Build the full URL
+                if 'url' in source and source['url']:
+                    if source['url'].startswith('http'):
+                        full_url = source['url']
+                    else:
+                        full_url = AON_WEB_BASE + source['url']
+                else:
+                    full_url = None
+                
+                result = {
+                    'name': source.get('name', 'Unknown'),
+                    'type': source.get('type', 'Unknown'),
+                    'url': full_url,
+                    'text': source.get('text', ''),
+                    'level': source.get('level'),
+                    'price': source.get('price'),
+                    'category': source.get('category'),
+                    'source': source.get('source'),
+                    'score': hit['_score']
+                }
+                results.append(result)
+        
+        logger.info(f"Found {len(results)} results")
+        return results
+        
     except requests.exceptions.RequestException as e:
-        print(f"[ERROR] An HTTP error occurred during Archives of Nethys search or item page fetch: {e}")
+        logger.error(f"API request failed: {e}")
+        return None
+    except json.JSONDecodeError as e:
+        logger.error(f"Failed to parse API response: {e}")
         return None
     except Exception as e:
-        print(f"[ERROR] An unexpected error occurred during Archives of Nethys scraping process: {e}")
+        logger.error(f"Unexpected error in API search: {e}")
         return None
+
+def create_embed_from_result(result):
+    """Create a Discord embed from a search result."""
+    
+    # Clean up the text content
+    text = result.get('text', '').strip()
+    if len(text) > 4000:
+        text = text[:4000] + "\n\n... (truncated)"
+    
+    # Create embed
+    embed = discord.Embed(
+        title=result['name'],
+        url=result['url'] if result['url'] else None,
+        description=text if text else "No description available.",
+        color=discord.Color.dark_red()
+    )
+    
+    # Add fields for additional info
+    if result.get('type'):
+        embed.add_field(name="Type", value=result['type'], inline=True)
+    
+    if result.get('level'):
+        embed.add_field(name="Level", value=str(result['level']), inline=True)
+    
+    if result.get('price'):
+        embed.add_field(name="Price", value=result['price'], inline=True)
+    
+    if result.get('category'):
+        embed.add_field(name="Category", value=result['category'], inline=True)
+    
+    if result.get('source'):
+        embed.add_field(name="Source", value=result['source'], inline=True)
+    
+    embed.set_footer(text="Data from Archives of Nethys • Powered by Elasticsearch API")
+    
+    return embed
 
 # --- DISCORD EVENTS ---
 
 @client.event
 async def on_ready():
     """Called when the bot successfully logs in."""
-    print(f'Bot is ready and logged in as {client.user}')
-    print('-----------------------------------------')
+    logger.info(f'Bot is ready and logged in as {client.user}')
+    logger.info(f'Bot is in {len(client.guilds)} guilds')
+    logger.info('-----------------------------------------')
 
 @client.event
 async def on_message(message):
     """Called every time a message is sent in a channel the bot can see."""
-    # Ignore messages sent by the bot itself
     if message.author == client.user:
         return
 
-    # Check if the message starts with the defined command prefix
-    # and has a space after it (e.g., "!aon potion of healing")
+    # Handle search command
     if message.content.startswith(COMMAND_PREFIX + " "):
-        # Extract the query after the command prefix
         query = message.content[len(COMMAND_PREFIX)+1:].strip()
 
         if not query:
-            # If no query is provided after the command
             await message.channel.send(f"Please provide an item to search for. Usage: `{COMMAND_PREFIX} <item name>`")
             return
 
-        # Send a temporary "processing" message
-        processing_message = await message.channel.send(f"🔍 Searching for `{query}` on the Archives...")
+        logger.info(f"Processing search request for: {query}")
         
-        # Perform the search and scrape
-        item_data = search_archives_of_nethys(query)
-        
-        # Delete the "processing" message
-        await processing_message.delete()
+        try:
+            # Send processing message
+            processing_message = await message.channel.send(f"🔍 Searching for `{query}` in the Archives...")
+            
+            # Perform the search
+            results = search_aon_api(query, result_limit=3)
+            
+            # Delete processing message
+            try:
+                await processing_message.delete()
+            except discord.errors.NotFound:
+                pass
+            
+            if results and len(results) > 0:
+                # Send the best result
+                best_result = results[0]
+                embed = create_embed_from_result(best_result)
+                
+                # If there are multiple results, mention them
+                if len(results) > 1:
+                    other_results = [r['name'] for r in results[1:]]
+                    embed.add_field(
+                        name="Other matches", 
+                        value=", ".join(other_results[:3]) + ("..." if len(other_results) > 3 else ""),
+                        inline=False
+                    )
+                
+                await message.channel.send(embed=embed)
+                logger.info(f"Successfully sent result for: {query}")
+                
+            else:
+                await message.channel.send(f"Sorry, I couldn't find anything matching `{query}`. Try different terms or check your spelling.")
+                
+        except discord.errors.Forbidden:
+            logger.error("Bot doesn't have permission to send messages in this channel")
+        except Exception as e:
+            logger.error(f"Error processing search: {e}")
+            try:
+                await processing_message.delete()
+            except:
+                pass
+            await message.channel.send(f"An error occurred while searching for `{query}`. Please try again later.")
 
-        if item_data:
-            # If item data was successfully found, create and send an embed
-            embed = discord.Embed(
-                title=item_data['name'],
-                url=item_data['url'],
-                description=item_data['description'],
-                color=discord.Color.dark_red() # A nice color for the embed
-            )
-            embed.set_footer(text="Data sourced from Archives of Nethys (2e.aonprd.com)")
-            await message.channel.send(embed=embed)
-        else:
-            # If no item data was found or an error occurred during scraping
-            await message.channel.send(f"Sorry, I couldn't find an item matching `{query}`. Please check your spelling or try a different term.")
+    # Test command
+    elif message.content == f"{COMMAND_PREFIX}test":
+        await message.channel.send("Bot is working! 🤖 Using the new API-based search.")
+    
+    # Help command
+    elif message.content == f"{COMMAND_PREFIX}help":
+        help_embed = discord.Embed(
+            title="Archives of Nethys Bot Help",
+            description="Search for Pathfinder 2e content from the Archives of Nethys",
+            color=discord.Color.blue()
+        )
+        help_embed.add_field(
+            name="Commands",
+            value=f"`{COMMAND_PREFIX} <search term>` - Search for items, spells, creatures, etc.\n"
+                  f"`{COMMAND_PREFIX}test` - Test if the bot is working\n"
+                  f"`{COMMAND_PREFIX}help` - Show this help message",
+            inline=False
+        )
+        help_embed.add_field(
+            name="Examples",
+            value=f"`{COMMAND_PREFIX} healing potion`\n"
+                  f"`{COMMAND_PREFIX} fireball`\n"
+                  f"`{COMMAND_PREFIX} goblin`",
+            inline=False
+        )
+        await message.channel.send(embed=help_embed)
+
+@client.event
+async def on_error(event, *args, **kwargs):
+    """Handle errors that occur during events."""
+    logger.error(f"An error occurred in event {event}", exc_info=True)
 
 # --- RUN THE BOT ---
 if __name__ == "__main__":
-    # Ensure the token is available from the environment
-    # The bot will not start if the token is not found.
-    client.run(TOKEN)
+    try:
+        client.run(TOKEN)
+    except discord.errors.LoginFailure:
+        logger.error("Invalid token provided")
+    except Exception as e:
+        logger.error(f"Failed to start bot: {e}")
