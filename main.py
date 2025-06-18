@@ -7,6 +7,8 @@ import os
 import requests
 import json
 import logging
+import re
+from html import unescape
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -133,11 +135,27 @@ def search_aon_api(query: str, result_limit: int = 5):
         logger.error(f"Unexpected error in API search: {e}")
         return None
 
+def clean_text(text):
+    """Clean HTML/XML tags and entities from text."""
+    if not text:
+        return ""
+    
+    # Remove HTML/XML tags
+    text = re.sub(r'<[^>]+>', '', text)
+    
+    # Decode HTML entities (&amp; becomes &, etc.)
+    text = unescape(text)
+    
+    # Clean up extra whitespace
+    text = re.sub(r'\s+', ' ', text).strip()
+    
+    return text
+
 def create_embed_from_result(result):
     """Create a Discord embed from a search result."""
     
     # Clean up the text content
-    text = result.get('text', '').strip()
+    text = clean_text(result.get('text', ''))
     if len(text) > 4000:
         text = text[:4000] + "\n\n... (truncated)"
     
