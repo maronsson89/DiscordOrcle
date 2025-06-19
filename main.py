@@ -167,47 +167,76 @@ def create_embed_from_result(result, other_results=None):
     """Create a Discord embed from a search result."""
     
     embed = discord.Embed(
-        title=result['name'],
-        url=result['url'] if result['url'] else None,
-        color=discord.Color.blue()
+        color=discord.Color.dark_grey()
     )
     
-    # Add rarity to title if not common
-    if result.get('rarity') and result['rarity'].lower() != 'common':
-        embed.title = f"{result['name']} ({result['rarity']})"
-    
-    # Clean description
-    description = clean_text(result.get('text', ''))
-    if len(description) > 4000:
-        description = description[:4000] + "\n\n... (truncated)"
-    
-    embed.description = description if description else "No description available."
-    
-    # Add info fields
+    # Set the type as the author (top small text)
     if result.get('type'):
-        embed.add_field(name="Type", value=result['type'], inline=True)
+        embed.set_author(name=result['type'])
+    
+    # Main title
+    title = result['name']
+    if result.get('rarity') and result['rarity'].lower() != 'common':
+        title = f"{result['name']} ({result['rarity']})"
+    
+    embed.title = title
+    if result.get('url'):
+        embed.url = result['url']
+    
+    # Build the stats section (like the traits and stats)
+    stats_parts = []
+    
+    # Extract traits from the text if available (this might need adjustment based on data structure)
+    text = clean_text(result.get('text', ''))
+    
+    # Add basic stats
+    if result.get('price'):
+        stats_parts.append(f"**Price** {result['price']}")
     
     if result.get('level'):
-        embed.add_field(name="Level", value=str(result['level']), inline=True)
-    
-    if result.get('price'):
-        embed.add_field(name="Price", value=result['price'], inline=True)
+        stats_parts.append(f"**Level** {result['level']}")
     
     if result.get('category'):
-        embed.add_field(name="Category", value=result['category'], inline=True)
+        stats_parts.append(f"**Category** {result['category']}")
     
+    # If we have stats, add them as a field
+    if stats_parts:
+        embed.add_field(
+            name="\u200b",  # Invisible character
+            value="\n".join(stats_parts),
+            inline=False
+        )
+    
+    # Add a separator line (using Unicode box drawing)
+    embed.add_field(
+        name="\u200b",
+        value="─" * 50,
+        inline=False
+    )
+    
+    # Main description
+    if text:
+        if len(text) > 1000:
+            text = text[:1000] + "..."
+        embed.add_field(
+            name="\u200b",
+            value=text,
+            inline=False
+        )
+    
+    # Source information at the bottom
+    source_parts = []
     if result.get('source'):
-        embed.add_field(name="Source", value=result['source'], inline=True)
+        source_parts.append(f"**Source:** {result['source']}")
     
-    # Add spacing field if odd number of fields
-    field_count = sum(1 for x in [result.get('type'), result.get('level'), result.get('price'), 
-                                  result.get('category'), result.get('source')] if x)
-    if field_count % 3 == 1:
-        embed.add_field(name="\u200b", value="\u200b", inline=True)
-    elif field_count % 3 == 2:
-        embed.add_field(name="\u200b", value="\u200b", inline=True)
+    if source_parts:
+        embed.add_field(
+            name="\u200b",
+            value=" • ".join(source_parts),
+            inline=False
+        )
     
-    # Add other results
+    # Add other results if available
     if other_results:
         other_names = [r['name'] for r in other_results[:3]]
         embed.add_field(
@@ -215,9 +244,6 @@ def create_embed_from_result(result, other_results=None):
             value=", ".join(other_names) + ("..." if len(other_results) > 3 else ""),
             inline=False
         )
-    
-    # Footer
-    embed.set_footer(text="Archives of Nethys")
     
     return embed
 
