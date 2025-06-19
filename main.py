@@ -1,5 +1,4 @@
-# main.py - PF2e Discord Bot with Slash Commands
-# v6 - Modern slash commands with autocomplete and better UX
+# main.py - Simple PF2e Discord Bot with Slash Commands (No Images)
 
 import discord
 from discord.ext import commands
@@ -9,7 +8,6 @@ import aiohttp
 import json
 import logging
 import re
-import asyncio
 from html import unescape
 from typing import List, Optional
 import time
@@ -32,97 +30,6 @@ except Exception as e:
 # Archives of Nethys Elasticsearch API
 AON_API_BASE = "https://elasticsearch.aonprd.com/aon/_search"
 AON_WEB_BASE = "https://2e.aonprd.com/"
-
-# Foundry VTT PF2e System Images via jsDelivr CDN  
-# These are the actual images from the official PF2e system
-FOUNDRY_CDN_BASE = "https://cdn.jsdelivr.net/gh/foundryvtt/pf2e@master/static/icons/"
-
-# Real Foundry PF2e image mappings (verified paths from the system)
-FOUNDRY_EQUIPMENT_IMAGES = {
-    # Weapons - Swords
-    "longsword": "equipment/weapons/longsword.webp",
-    "shortsword": "equipment/weapons/shortsword.webp", 
-    "bastard sword": "equipment/weapons/bastard-sword.webp",
-    "greatsword": "equipment/weapons/greatsword.webp",
-    "scimitar": "equipment/weapons/scimitar.webp",
-    "rapier": "equipment/weapons/rapier.webp",
-    "katana": "equipment/weapons/katana.webp",
-    
-    # Weapons - Axes
-    "handaxe": "equipment/weapons/hatchet.webp",
-    "battle axe": "equipment/weapons/battle-axe.webp",
-    "greataxe": "equipment/weapons/greataxe.webp",
-    
-    # Weapons - Bludgeoning
-    "club": "equipment/weapons/club.webp", 
-    "mace": "equipment/weapons/mace.webp",
-    "maul": "equipment/weapons/maul.webp",
-    "warhammer": "equipment/weapons/warhammer.webp",
-    
-    # Weapons - Polearms
-    "spear": "equipment/weapons/spear.webp",
-    "glaive": "equipment/weapons/glaive.webp",
-    "halberd": "equipment/weapons/halberd.webp",
-    "lance": "equipment/weapons/lance.webp",
-    
-    # Weapons - Ranged
-    "shortbow": "equipment/weapons/shortbow.webp",
-    "longbow": "equipment/weapons/longbow.webp",
-    "composite shortbow": "equipment/weapons/composite-shortbow.webp",
-    "composite longbow": "equipment/weapons/composite-longbow.webp",
-    "crossbow": "equipment/weapons/crossbow.webp",
-    "heavy crossbow": "equipment/weapons/heavy-crossbow.webp",
-    
-    # Weapons - Thrown
-    "dart": "equipment/weapons/dart.webp",
-    "javelin": "equipment/weapons/javelin.webp",
-    "dagger": "equipment/weapons/dagger.webp",
-    
-    # Weapons - Exotic
-    "whip": "equipment/weapons/whip.webp",
-    "meteor hammer": "equipment/weapons/meteor-hammer.webp",
-    
-    # Armor - Light
-    "leather armor": "equipment/armor/leather-armor.webp",
-    "studded leather armor": "equipment/armor/studded-leather.webp",
-    "chain shirt": "equipment/armor/chain-shirt.webp",
-    
-    # Armor - Medium  
-    "scale mail": "equipment/armor/scale-mail.webp",
-    "chain mail": "equipment/armor/chain-mail.webp",
-    "breastplate": "equipment/armor/breastplate.webp",
-    
-    # Armor - Heavy
-    "splint armor": "equipment/armor/splint.webp",
-    "plate armor": "equipment/armor/full-plate.webp",
-    "half plate": "equipment/armor/half-plate.webp",
-    
-    # Shields
-    "buckler": "equipment/shields/buckler.webp",
-    "shield": "equipment/shields/steel-shield.webp", 
-    "wooden shield": "equipment/shields/wooden-shield.webp",
-    "tower shield": "equipment/shields/tower-shield.webp",
-    
-    # Consumables
-    "healing potion": "equipment/consumables/healing-potion.webp",
-    "minor healing potion": "equipment/consumables/healing-potion.webp",
-    "moderate healing potion": "equipment/consumables/healing-potion.webp",
-    "greater healing potion": "equipment/consumables/healing-potion.webp",
-    "elixir": "equipment/consumables/elixir-life.webp",
-    "antidote": "equipment/consumables/antidote.webp",
-    
-    # Magic Items - Rings
-    "ring": "equipment/rings/ring-of-protection.webp",
-    "ring of protection": "equipment/rings/ring-of-protection.webp",
-    
-    # Magic Items - Amulets/Necklaces
-    "amulet": "equipment/neck/amulet.webp",
-    "necklace": "equipment/neck/necklace.webp",
-    
-    # Magic Items - Wands/Staves
-    "wand": "equipment/staves-wands/wand.webp",
-    "staff": "equipment/staves-wands/staff.webp",
-}
 
 # Search categories for filtering
 SEARCH_CATEGORIES = [
@@ -160,47 +67,6 @@ def clean_text(text):
     text = re.sub(r'\s+', ' ', text).strip()
     
     return text
-
-def get_foundry_image(item_name):
-    """Get equipment image from the official Foundry VTT PF2e system."""
-    normalized_name = item_name.lower().strip()
-    
-    # Direct lookup in foundry equipment images
-    if normalized_name in FOUNDRY_EQUIPMENT_IMAGES:
-        image_path = FOUNDRY_EQUIPMENT_IMAGES[normalized_name]
-        return f"{FOUNDRY_CDN_BASE}{image_path}"
-    
-    # Try partial matches for compound names
-    for key, image_path in FOUNDRY_EQUIPMENT_IMAGES.items():
-        if key in normalized_name:
-            return f"{FOUNDRY_CDN_BASE}{image_path}"
-        # Also try reverse matching for "magic longsword" -> "longsword"
-        if any(word in key for word in normalized_name.split() if len(word) > 3):
-            return f"{FOUNDRY_CDN_BASE}{image_path}"
-    
-    # Generic fallbacks based on item name keywords
-    if any(word in normalized_name for word in ["sword", "blade", "rapier", "scimitar", "katana"]):
-        return f"{FOUNDRY_CDN_BASE}equipment/weapons/longsword.webp"
-    elif any(word in normalized_name for word in ["axe", "hatchet"]):
-        return f"{FOUNDRY_CDN_BASE}equipment/weapons/battle-axe.webp"
-    elif any(word in normalized_name for word in ["bow", "crossbow"]):
-        return f"{FOUNDRY_CDN_BASE}equipment/weapons/shortbow.webp"
-    elif any(word in normalized_name for word in ["armor", "mail", "plate"]):
-        return f"{FOUNDRY_CDN_BASE}equipment/armor/chain-mail.webp"
-    elif any(word in normalized_name for word in ["shield"]):
-        return f"{FOUNDRY_CDN_BASE}equipment/shields/steel-shield.webp"
-    elif any(word in normalized_name for word in ["potion", "elixir", "antidote"]):
-        return f"{FOUNDRY_CDN_BASE}equipment/consumables/healing-potion.webp"
-    elif any(word in normalized_name for word in ["ring"]):
-        return f"{FOUNDRY_CDN_BASE}equipment/rings/ring-of-protection.webp"
-    elif any(word in normalized_name for word in ["amulet", "necklace"]):
-        return f"{FOUNDRY_CDN_BASE}equipment/neck/amulet.webp"
-    elif any(word in normalized_name for word in ["wand"]):
-        return f"{FOUNDRY_CDN_BASE}equipment/staves-wands/wand.webp"
-    elif any(word in normalized_name for word in ["staff"]):
-        return f"{FOUNDRY_CDN_BASE}equipment/staves-wands/staff.webp"
-    
-    return None
 
 async def search_aon_api(query: str, result_limit: int = 5, category_filter: str = None):
     """Search Archives of Nethys using their Elasticsearch API."""
@@ -255,7 +121,9 @@ async def search_aon_api(query: str, result_limit: int = 5, category_filter: str
                 json=search_body,
                 headers={
                     'Content-Type': 'application/json',
-                    'User-Agent': 'DiscordBot-AON-Search/2.0'
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                    'Accept': 'application/json',
+                    'Referer': 'https://2e.aonprd.com/'
                 },
                 timeout=aiohttp.ClientTimeout(total=10)
             ) as response:
@@ -295,15 +163,13 @@ async def search_aon_api(query: str, result_limit: int = 5, category_filter: str
         logger.error(f"Search error for query '{query}': {e}")
         return []
 
-def create_embed_from_result(result, image_url=None, other_results=None):
+def create_embed_from_result(result, other_results=None):
     """Create a Discord embed from a search result."""
-    
-    color = discord.Color.gold() if image_url else discord.Color.dark_red()
     
     embed = discord.Embed(
         title=result['name'],
         url=result['url'] if result['url'] else None,
-        color=color
+        color=discord.Color.blue()
     )
     
     # Add rarity to title if not common
@@ -350,16 +216,8 @@ def create_embed_from_result(result, image_url=None, other_results=None):
             inline=False
         )
     
-    # Add image
-    if image_url:
-        embed.set_thumbnail(url=image_url)
-    
     # Footer
-    footer_text = "Archives of Nethys"
-    if image_url:
-        footer_text += " • Images from Foundry VTT PF2e"
-    
-    embed.set_footer(text=footer_text)
+    embed.set_footer(text="Archives of Nethys")
     
     return embed
 
@@ -383,7 +241,6 @@ class PF2eBot(commands.Bot):
         """Called when the bot is ready."""
         logger.info(f'Bot is ready! Logged in as {self.user}')
         logger.info(f'Bot is in {len(self.guilds)} guilds')
-        logger.info(f'Foundry image database: {len(FOUNDRY_EQUIPMENT_IMAGES)} items')
         logger.info('-' * 50)
 
 bot = PF2eBot()
@@ -430,15 +287,13 @@ async def search_autocomplete(
 @bot.tree.command(name="search", description="Search the Archives of Nethys for Pathfinder 2e content")
 @app_commands.describe(
     query="What to search for (items, spells, feats, etc.)",
-    category="Filter by category (optional)",
-    include_image="Try to include official artwork when available"
+    category="Filter by category (optional)"
 )
 @app_commands.autocomplete(query=search_autocomplete, category=category_autocomplete)
 async def search_command(
     interaction: discord.Interaction, 
     query: str,
-    category: Optional[str] = None,
-    include_image: bool = True
+    category: Optional[str] = None
 ):
     """Main search command with slash command interface."""
     
@@ -462,15 +317,9 @@ async def search_command(
         # Get best result
         best_result = results[0]
         
-        # Check for image if requested
-        image_url = None
-        if include_image:
-            image_url = get_foundry_image(best_result['name'])
-        
         # Create embed
         embed = create_embed_from_result(
             best_result, 
-            image_url=image_url,
             other_results=results[1:] if len(results) > 1 else None
         )
         
@@ -493,52 +342,6 @@ async def search_command(
         )
         await interaction.followup.send(embed=embed, ephemeral=True)
 
-@bot.tree.command(name="random", description="Get a random item from the Archives of Nethys")
-@app_commands.describe(category="Filter by category (optional)")
-@app_commands.autocomplete(category=category_autocomplete)
-async def random_command(
-    interaction: discord.Interaction,
-    category: Optional[str] = None
-):
-    """Get a random item from the archives."""
-    
-    await interaction.response.defer()
-    
-    try:
-        # Use a random search to get diverse results
-        import random
-        random_terms = ["sword", "potion", "armor", "spell", "ring", "staff", "bow", "shield"]
-        random_query = random.choice(random_terms)
-        
-        results = await search_aon_api(random_query, result_limit=10, category_filter=category)
-        
-        if not results:
-            embed = discord.Embed(
-                title="No Random Item Found",
-                description="Couldn't find a random item. Try again!",
-                color=discord.Color.red()
-            )
-            await interaction.followup.send(embed=embed)
-            return
-        
-        # Pick a random result
-        random_result = random.choice(results)
-        image_url = get_foundry_image(random_result['name'])
-        
-        embed = create_embed_from_result(random_result, image_url=image_url)
-        embed.add_field(name="🎲 Random Item", value="Here's something interesting!", inline=False)
-        
-        await interaction.followup.send(embed=embed)
-        
-    except Exception as e:
-        logger.error(f"Error in random command: {e}")
-        embed = discord.Embed(
-            title="Random Error",
-            description="An error occurred while finding a random item.",
-            color=discord.Color.red()
-        )
-        await interaction.followup.send(embed=embed, ephemeral=True)
-
 @bot.tree.command(name="help", description="Show help information for the bot")
 async def help_command(interaction: discord.Interaction):
     """Show bot help information."""
@@ -553,14 +356,6 @@ async def help_command(interaction: discord.Interaction):
         name="🔍 /search",
         value="Search for any PF2e content\n"
               "• **query**: What to search for\n"
-              "• **category**: Filter by type (optional)\n"
-              "• **include_image**: Show artwork when available",
-        inline=False
-    )
-    
-    embed.add_field(
-        name="🎲 /random",
-        value="Get a random item from the archives\n"
               "• **category**: Filter by type (optional)",
         inline=False
     )
@@ -579,106 +374,9 @@ async def help_command(interaction: discord.Interaction):
         inline=False
     )
     
-    embed.add_field(
-        name="🎨 Features",
-        value=f"• **{len(FOUNDRY_IMAGE_MAP)}** items with official artwork\n"
-              "• Smart search with fuzzy matching\n"
-              "• Fast results with caching\n"
-              "• Category filtering",
-        inline=False
-    )
-    
-    embed.set_footer(text="Data from Archives of Nethys • Images from Foundry VTT PF2e")
+    embed.set_footer(text="Data from Archives of Nethys")
     
     await interaction.response.send_message(embed=embed)
-
-@bot.tree.command(name="credits", description="Show credits and legal information")
-async def credits_command(interaction: discord.Interaction):
-    """Show credits and attribution."""
-    
-    embed = discord.Embed(
-        title="📜 Credits & Attribution",
-        description="This bot uses content from multiple sources",
-        color=discord.Color.green()
-    )
-    
-    embed.add_field(
-        name="📖 Game Data",
-        value="[Archives of Nethys](https://2e.aonprd.com/)\n"
-              "Official Pathfinder 2e SRD content",
-        inline=False
-    )
-    
-    embed.add_field(
-        name="🎨 Artwork",
-        value="Foundry VTT PF2e System (Apache License)\n"
-              "Official Paizo artwork with permission",
-        inline=False
-    )
-    
-    embed.add_field(
-        name="⚖️ Legal Notice",
-        value="This bot uses trademarks and/or copyrights owned by Paizo Inc., "
-              "used under Paizo's Community Use Policy.\n"
-              "[paizo.com/communityuse](https://paizo.com/communityuse)",
-        inline=False
-    )
-    
-    embed.add_field(
-        name="🔧 Bot Info",
-        value="Built with discord.py\n"
-              "Slash commands for modern Discord experience",
-        inline=False
-    )
-    
-    await interaction.response.send_message(embed=embed)
-
-# --- CONTEXT MENU COMMANDS ---
-@bot.tree.context_menu(name="Search Archives of Nethys")
-async def context_search(interaction: discord.Interaction, message: discord.Message):
-    """Context menu command to search selected text."""
-    
-    # Extract search query from message content
-    query = message.content.strip()
-    
-    # Limit query length
-    if len(query) > 100:
-        query = query[:100]
-    
-    if not query:
-        await interaction.response.send_message(
-            "No text found to search for!", 
-            ephemeral=True
-        )
-        return
-    
-    await interaction.response.defer(ephemeral=True)
-    
-    try:
-        results = await search_aon_api(query, result_limit=1)
-        
-        if results:
-            result = results[0]
-            image_url = get_foundry_image(result['name'])
-            embed = create_embed_from_result(result, image_url=image_url)
-            embed.add_field(
-                name="🔍 Context Search", 
-                value=f"Searched for: **{query}**", 
-                inline=False
-            )
-            await interaction.followup.send(embed=embed, ephemeral=True)
-        else:
-            await interaction.followup.send(
-                f"No results found for: **{query}**", 
-                ephemeral=True
-            )
-            
-    except Exception as e:
-        logger.error(f"Error in context search: {e}")
-        await interaction.followup.send(
-            "An error occurred during the search.", 
-            ephemeral=True
-        )
 
 # --- ERROR HANDLING ---
 @bot.tree.error
