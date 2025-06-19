@@ -223,7 +223,7 @@ def create_embed_from_result(result, other_results=None):
     if result.get('type'):
         embed.set_author(name=result['type'])
     
-    # Main title with rarity
+    # Main title with rarity in parentheses if not common
     title = result['name']
     if result.get('rarity') and result['rarity'].lower() != 'common':
         title = f"{result['name']} ({result['rarity']})"
@@ -239,23 +239,19 @@ def create_embed_from_result(result, other_results=None):
     traits = parse_traits_from_text(text)
     weapon_stats = parse_weapon_stats(text, result)
     
-    # Build the stats section exactly like the image
+    # Build the stats section exactly like the screenshot
     stats_lines = []
     
-    # Add traits in brackets if found
+    # Add traits in brackets if found (first line)
     if traits:
         trait_string = "  ".join([f"[ {trait} ]" for trait in traits])
         stats_lines.append(trait_string)
     
-    # Add level (important for items, spells, feats)
-    if result.get('level'):
-        stats_lines.append(f"**Level** {result['level']}")
-    
-    # Add price
+    # Add price (second line)
     if result.get('price'):
         stats_lines.append(f"**Price** {result['price']}")
     
-    # Add bulk and hands on same line if available (weapon-specific)
+    # Add bulk and hands on same line (third line, weapon-specific)
     bulk_hands_parts = []
     if weapon_stats.get('bulk'):
         bulk_hands_parts.append(f"Bulk {weapon_stats['bulk']}")
@@ -264,11 +260,11 @@ def create_embed_from_result(result, other_results=None):
     if bulk_hands_parts:
         stats_lines.append("**" + "; ".join(bulk_hands_parts) + "**")
     
-    # Add damage (weapon-specific)
+    # Add damage (fourth line, weapon-specific)
     if weapon_stats.get('damage'):
         stats_lines.append(f"**Damage** {weapon_stats['damage']}")
     
-    # Add category and group
+    # Add category and group (fifth line)
     category_parts = []
     if result.get('category'):
         category_parts.append(result['category'])
@@ -277,14 +273,13 @@ def create_embed_from_result(result, other_results=None):
     if category_parts:
         stats_lines.append("**Category** " + "; ".join(category_parts))
     
-    # Add type as a separate field if it's not already shown and is important
-    item_type = result.get('type')
-    if item_type and item_type.lower() not in ['equipment', 'item']:
-        stats_lines.append(f"**Type** {item_type}")
-    
-    # Add rarity as a separate line if it's not common
-    if result.get('rarity') and result['rarity'].lower() != 'common':
-        stats_lines.append(f"**Rarity** {result['rarity']}")
+    # Add level only for items that actually have meaningful levels (spells, magic items, etc.)
+    # Don't show level for basic equipment unless it's actually relevant
+    if result.get('level') and result.get('level') != 0:
+        item_type = result.get('type', '').lower()
+        # Show level for spells, magic items, feats, but not basic equipment
+        if item_type in ['spell', 'feat', 'magic item', 'consumable'] or 'magic' in text.lower():
+            stats_lines.append(f"**Level** {result['level']}")
     
     # Add stats section
     if stats_lines:
@@ -294,15 +289,14 @@ def create_embed_from_result(result, other_results=None):
             inline=False
         )
     
-    # Add separator line
+    # Add separator line (exactly like screenshot)
     embed.add_field(
         name="\u200b",
         value="─" * 45,
         inline=False
     )
     
-    # Extract main description (usually the paragraph after stats)
-    # Try to find the descriptive text by removing stat lines
+    # Extract clean description by removing stat information
     description_text = text
     
     # Remove common stat patterns to get clean description
@@ -314,9 +308,10 @@ def create_embed_from_result(result, other_results=None):
     description_text = re.sub(r'group\s*:?\s*\w+', '', description_text, flags=re.IGNORECASE)
     description_text = re.sub(r'level\s*:?\s*\d+', '', description_text, flags=re.IGNORECASE)
     description_text = re.sub(r'rarity\s*:?\s*\w+', '', description_text, flags=re.IGNORECASE)
+    description_text = re.sub(r'traits?\s*:?[^.]*', '', description_text, flags=re.IGNORECASE)
     description_text = description_text.strip()
     
-    # Add main description
+    # Add main description (the paragraph of text)
     if description_text:
         if len(description_text) > 1000:
             description_text = description_text[:1000] + "..."
@@ -326,15 +321,16 @@ def create_embed_from_result(result, other_results=None):
             inline=False
         )
     else:
-        # Fallback to "No description available" if we can't extract clean text
+        # Fallback if we can't extract clean text
         embed.add_field(
             name="\u200b",
             value="No description available.",
             inline=False
         )
     
-    # Add source information at the bottom
+    # Add source information at the bottom (exactly like screenshot format)
     if result.get('source'):
+        # Format like "PF2E Treasure Vault p25 (originally LOGM p120)" 
         source_text = f"**{result['source']}**"
         embed.add_field(
             name="\u200b",
@@ -350,6 +346,9 @@ def create_embed_from_result(result, other_results=None):
             value=", ".join(other_names) + ("..." if len(other_results) > 3 else ""),
             inline=False
         )
+    
+    # Footer credit to Archives of Nethys
+    embed.set_footer(text="Data from Archives of Nethys")
     
     return embed
 
