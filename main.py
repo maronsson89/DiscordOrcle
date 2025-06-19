@@ -166,49 +166,104 @@ async def search_aon_api(query: str, result_limit: int = 5, category_filter: str
 def parse_traits_from_text(text):
     """Extract traits from item text."""
     traits = []
-    # Look for trait patterns in parentheses or specific formatting
+    # Look for trait patterns - more comprehensive list
     trait_patterns = [
         r'\bbackswing\b', r'\bdisarm\b', r'\breach\b', r'\btrip\b', r'\bfinesse\b',
-        r'\bagile\b', r'\bdeadly\b', r'\bfatal\b', r'\bversatile\b', r'\bparry\b',
-        r'\btwo-hand\b', r'\bthrown\b', r'\branged\b', r'\bvolley\b'
+        r'\bagile\b', r'\bdeadly\b', r'\bfatal\b', r'\bversatile\s+[a-z]\b', r'\bparry\b',
+        r'\btwo-hand\b', r'\bthrown\b', r'\branged\b', r'\bvolley\b', r'\bforceful\b',
+        r'\bshove\b', r'\bsweep\b', r'\btwin\b', r'\bmonk\b', r'\bunarmed\b',
+        r'\bfree-hand\b', r'\bgrapple\b', r'\bnonlethal\b', r'\bpropulsive\b'
     ]
     
     for pattern in trait_patterns:
-        if re.search(pattern, text, re.IGNORECASE):
-            trait_name = pattern.replace(r'\b', '').replace(r'\\', '')
-            traits.append(trait_name.title())
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            trait_name = match.group(0)
+            # Handle special case for versatile (include the damage type)
+            if 'versatile' in trait_name.lower():
+                versatile_match = re.search(r'versatile\s+([a-z])\b', text, re.IGNORECASE)
+                if versatile_match:
+                    damage_type = versatile_match.group(1).upper()
+                    traits.append(f"Versatile {damage_type}")
+                else:
+                    traits.append("Versatile")
+            else:
+                traits.append(trait_name.title())
     
-    return traits
+    return list(set(traits))  # Remove duplicates
 
 def parse_weapon_stats(text, result):
     """Parse weapon-specific stats from text."""
     stats = {}
     
-    # Extract damage (look for patterns like "1d8", "1d6+1", etc.)
-    damage_match = re.search(r'(\d+d\d+(?:\+\d+)?)\s*(\w+)?', text, re.IGNORECASE)
-    if damage_match:
-        damage_die = damage_match.group(1)
-        damage_type = damage_match.group(2) or "bludgeoning"
-        stats['damage'] = f"{damage_die} {damage_type.lower()}"
+    # Extract damage - look for more specific patterns
+    damage_patterns = [
+        r'(\d+d\d+(?:\+\d+)?)\s+(slashing|piercing|bludgeoning|s|p|b)\b',
+        r'damage\s+(\d+d\d+(?:\+\d+)?)\s*(\w+)?',
+        r'(\d+d\d+)\s*(\w+)?\s+damage'
+    ]
     
-    # Extract bulk (look for "Bulk" followed by number or L)
-    bulk_match = re.search(r'bulk\s*([0-9]+|L|-)', text, re.IGNORECASE)
-    if bulk_match:
-        stats['bulk'] = bulk_match.group(1)
+    for pattern in damage_patterns:
+        damage_match = re.search(pattern, text, re.IGNORECASE)
+        if damage_match:
+            damage_die = damage_match.group(1)
+            damage_type = damage_match.group(2) if len(damage_match.groups()) > 1 else None
+            
+            # Convert abbreviations to full names
+            if damage_type:
+                damage_type_map = {'s': 'slashing', 'p': 'piercing', 'b': 'bludgeoning'}
+                damage_type = damage_type_map.get(damage_type.lower(), damage_type.lower())
+            else:
+                damage_type = "slashing"  # Default for swords
+            
+            stats['damage'] = f"{damage_die} {damage_type}"
+            break
     
-    # Extract hands (look for "Hands" or common patterns)
-    hands_match = re.search(r'hands?\s*(\d+)', text, re.IGNORECASE)
-    if hands_match:
-        stats['hands'] = hands_match.group(1)
-    elif 'two-hand' in text.lower():
-        stats['hands'] = '2'
-    elif 'one-hand' in text.lower():
-        stats['hands'] = '1'
+    # Extract bulk - look for more patterns
+    bulk_patterns = [
+        r'bulk\s+([0-9]+|L|-)\b',
+        r'bulk:?\s*([0-9]+|L|-)',
+        r'\bbulk\s+([0-9]+|L|-)'
+    ]
     
-    # Try to extract group information
-    group_match = re.search(r'group\s+(\w+)', text, re.IGNORECASE)
-    if group_match:
-        stats['group'] = group_match.group(1).lower()
+    for pattern in bulk_patterns:
+        bulk_match = re.search(pattern, text, re.IGNORECASE)
+        if bulk_match:
+            stats['bulk'] = bulk_match.group(1)
+            break
+    
+    # Extract hands - look for more patterns
+    hands_patterns = [
+        r'hands?\s+(\d+)\b',
+        r'hands?:?\s*(\d+)',
+        r'(\d+)\s*hands?'
+    ]
+    
+    for pattern in hands_patterns:
+        hands_match = re.search(pattern, text, re.IGNORECASE)
+        if hands_match:
+            stats['hands'] = hands_match.group(1)
+            break
+    
+    # Default hands based on weapon type if not found
+    if 'hands' not in stats:
+        if 'two-hand' in text.lower() or 'two hand' in text.lower():
+            stats['hands'] = '2'
+        else:
+            stats['hands'] = '1'  # Most weapons are 1-handed
+    
+    # Try to extract group information - more patterns
+    group_patterns = [
+        r'group\s+(\w+)\b',
+        r'weapon\s+group:?\s*(\w+)',
+        r'group:?\s*(\w+)'
+    ]
+    
+    for pattern in group_patterns:
+        group_match = re.search(pattern, text, re.IGNORECASE)
+        if group_match:
+            stats['group'] = group_match.group(1).lower()
+            break
     
     return stats
 
@@ -247,6 +302,10 @@ def create_embed_from_result(result, other_results=None):
         trait_string = "  ".join([f"[ {trait} ]" for trait in traits])
         stats_lines.append(trait_string)
     
+    # Add level (for spells, feats, magic items - before price)
+    if result.get('level') and result.get('level') != 0:
+        stats_lines.append(f"**Level** {result['level']}")
+    
     # Add price (second line)
     if result.get('price'):
         stats_lines.append(f"**Price** {result['price']}")
@@ -264,22 +323,36 @@ def create_embed_from_result(result, other_results=None):
     if weapon_stats.get('damage'):
         stats_lines.append(f"**Damage** {weapon_stats['damage']}")
     
-    # Add category and group (fifth line)
+    # Add category and group (fifth line) - comprehensive category info
     category_parts = []
     if result.get('category'):
-        category_parts.append(result['category'])
+        # Don't just show "weapon", show the proper category
+        category = result['category']
+        if category.lower() != 'weapon':
+            category_parts.append(category)
+        else:
+            # For weapons, try to determine if it's martial, simple, etc.
+            if 'martial' in text.lower():
+                category_parts.append('martial melee weapon')
+            elif 'simple' in text.lower():
+                category_parts.append('simple melee weapon')
+            else:
+                category_parts.append('melee weapon')
+    
     if weapon_stats.get('group'):
         category_parts.append(f"Group {weapon_stats['group']}")
+    
     if category_parts:
         stats_lines.append("**Category** " + "; ".join(category_parts))
     
-    # Add level only for items that actually have meaningful levels (spells, magic items, etc.)
-    # Don't show level for basic equipment unless it's actually relevant
-    if result.get('level') and result.get('level') != 0:
-        item_type = result.get('type', '').lower()
-        # Show level for spells, magic items, feats, but not basic equipment
-        if item_type in ['spell', 'feat', 'magic item', 'consumable'] or 'magic' in text.lower():
-            stats_lines.append(f"**Level** {result['level']}")
+    # Add type as separate line if it's different from author and meaningful
+    item_type = result.get('type')
+    if item_type and item_type.lower() not in ['equipment', 'item', 'weapon']:
+        stats_lines.append(f"**Type** {item_type}")
+    
+    # Add rarity as separate line if it's not common (additional to title)
+    if result.get('rarity') and result['rarity'].lower() != 'common':
+        stats_lines.append(f"**Rarity** {result['rarity']}")
     
     # Add stats section
     if stats_lines:
@@ -296,41 +369,57 @@ def create_embed_from_result(result, other_results=None):
         inline=False
     )
     
-    # Extract clean description by removing stat information
+    # Extract clean description by aggressively removing all stat information
     description_text = text
     
-    # Remove common stat patterns to get clean description
-    description_text = re.sub(r'price\s*:?\s*\d+\s*\w*', '', description_text, flags=re.IGNORECASE)
-    description_text = re.sub(r'bulk\s*:?\s*[0-9L-]+', '', description_text, flags=re.IGNORECASE)
-    description_text = re.sub(r'hands?\s*:?\s*\d+', '', description_text, flags=re.IGNORECASE)
-    description_text = re.sub(r'damage\s*:?\s*\d+d\d+\s*\w+', '', description_text, flags=re.IGNORECASE)
-    description_text = re.sub(r'category\s*:?[^.]*', '', description_text, flags=re.IGNORECASE)
-    description_text = re.sub(r'group\s*:?\s*\w+', '', description_text, flags=re.IGNORECASE)
-    description_text = re.sub(r'level\s*:?\s*\d+', '', description_text, flags=re.IGNORECASE)
-    description_text = re.sub(r'rarity\s*:?\s*\w+', '', description_text, flags=re.IGNORECASE)
-    description_text = re.sub(r'traits?\s*:?[^.]*', '', description_text, flags=re.IGNORECASE)
-    description_text = description_text.strip()
+    # Remove everything before the actual description
+    # Look for the start of the actual descriptive text
+    sentences = description_text.split('.')
+    clean_sentences = []
+    
+    for sentence in sentences:
+        sentence = sentence.strip()
+        # Skip sentences that are clearly stat information
+        if any(stat_word in sentence.lower() for stat_word in [
+            'price', 'bulk', 'hands', 'damage', 'category', 'group', 'level', 
+            'rarity', 'traits', 'source', 'core rulebook', 'favored weapon',
+            'type melee', 'critical specialization', 'specific magic weapons'
+        ]):
+            continue
+        
+        # Skip very short sentences (likely stat fragments)
+        if len(sentence) < 20:
+            continue
+            
+        # This looks like actual descriptive text
+        if len(sentence) > 20 and not re.search(r'^\s*[A-Z][a-z]+\s+[A-Z]', sentence):
+            clean_sentences.append(sentence)
+    
+    # Take the first few good sentences
+    if clean_sentences:
+        description_text = '. '.join(clean_sentences[:3]) + '.'
+    else:
+        # Fallback: show original text but truncated
+        description_text = text[:500] + "..." if len(text) > 500 else text
     
     # Add main description (the paragraph of text)
-    if description_text:
+    if description_text and len(description_text.strip()) > 10:
         if len(description_text) > 1000:
             description_text = description_text[:1000] + "..."
         embed.add_field(
             name="\u200b",
-            value=description_text,
+            value=description_text.strip(),
             inline=False
         )
     else:
-        # Fallback if we can't extract clean text
         embed.add_field(
             name="\u200b",
             value="No description available.",
             inline=False
         )
     
-    # Add source information at the bottom (exactly like screenshot format)
+    # Add source information at the bottom (clean format like screenshot)
     if result.get('source'):
-        # Format like "PF2E Treasure Vault p25 (originally LOGM p120)" 
         source_text = f"**{result['source']}**"
         embed.add_field(
             name="\u200b",
@@ -338,7 +427,7 @@ def create_embed_from_result(result, other_results=None):
             inline=False
         )
     
-    # Add other results if available
+    # Add other results if available (keep this information)
     if other_results:
         other_names = [r['name'] for r in other_results[:3]]
         embed.add_field(
