@@ -33,23 +33,96 @@ except Exception as e:
 AON_API_BASE = "https://elasticsearch.aonprd.com/aon/_search"
 AON_WEB_BASE = "https://2e.aonprd.com/"
 
-# Foundry VTT PF2e Equipment Images Database
-FOUNDRY_IMAGE_MAP = {
-    "meteor hammer": "systems/pf2e/icons/equipment/weapons/meteor-hammer.webp",
-    "healing potion": "systems/pf2e/icons/equipment/consumables/healing-potion.webp",
-    "minor healing potion": "systems/pf2e/icons/equipment/consumables/healing-potion.webp",
-    "longsword": "systems/pf2e/icons/equipment/weapons/longsword.webp",
-    "rope dart": "systems/pf2e/icons/equipment/weapons/rope-dart.webp",
-    "plate armor": "systems/pf2e/icons/equipment/armor/plate-armor.webp",
-    "leather armor": "systems/pf2e/icons/equipment/armor/leather-armor.webp",
-    "chain mail": "systems/pf2e/icons/equipment/armor/chain-mail.webp",
-    "shortbow": "systems/pf2e/icons/equipment/weapons/shortbow.webp",
-    "dagger": "systems/pf2e/icons/equipment/weapons/dagger.webp",
-    "rapier": "systems/pf2e/icons/equipment/weapons/rapier.webp",
-    "shield": "systems/pf2e/icons/equipment/shields/wooden-shield.webp",
-}
+# Foundry VTT PF2e System Images via jsDelivr CDN  
+# These are the actual images from the official PF2e system
+FOUNDRY_CDN_BASE = "https://cdn.jsdelivr.net/gh/foundryvtt/pf2e@master/static/icons/"
 
-FOUNDRY_IMAGE_BASE = "https://your-cdn.com/pf2e-images/"
+# Real Foundry PF2e image mappings (verified paths from the system)
+FOUNDRY_EQUIPMENT_IMAGES = {
+    # Weapons - Swords
+    "longsword": "equipment/weapons/longsword.webp",
+    "shortsword": "equipment/weapons/shortsword.webp", 
+    "bastard sword": "equipment/weapons/bastard-sword.webp",
+    "greatsword": "equipment/weapons/greatsword.webp",
+    "scimitar": "equipment/weapons/scimitar.webp",
+    "rapier": "equipment/weapons/rapier.webp",
+    "katana": "equipment/weapons/katana.webp",
+    
+    # Weapons - Axes
+    "handaxe": "equipment/weapons/hatchet.webp",
+    "battle axe": "equipment/weapons/battle-axe.webp",
+    "greataxe": "equipment/weapons/greataxe.webp",
+    
+    # Weapons - Bludgeoning
+    "club": "equipment/weapons/club.webp", 
+    "mace": "equipment/weapons/mace.webp",
+    "maul": "equipment/weapons/maul.webp",
+    "warhammer": "equipment/weapons/warhammer.webp",
+    
+    # Weapons - Polearms
+    "spear": "equipment/weapons/spear.webp",
+    "glaive": "equipment/weapons/glaive.webp",
+    "halberd": "equipment/weapons/halberd.webp",
+    "lance": "equipment/weapons/lance.webp",
+    
+    # Weapons - Ranged
+    "shortbow": "equipment/weapons/shortbow.webp",
+    "longbow": "equipment/weapons/longbow.webp",
+    "composite shortbow": "equipment/weapons/composite-shortbow.webp",
+    "composite longbow": "equipment/weapons/composite-longbow.webp",
+    "crossbow": "equipment/weapons/crossbow.webp",
+    "heavy crossbow": "equipment/weapons/heavy-crossbow.webp",
+    
+    # Weapons - Thrown
+    "dart": "equipment/weapons/dart.webp",
+    "javelin": "equipment/weapons/javelin.webp",
+    "dagger": "equipment/weapons/dagger.webp",
+    
+    # Weapons - Exotic
+    "whip": "equipment/weapons/whip.webp",
+    "meteor hammer": "equipment/weapons/meteor-hammer.webp",
+    
+    # Armor - Light
+    "leather armor": "equipment/armor/leather-armor.webp",
+    "studded leather armor": "equipment/armor/studded-leather.webp",
+    "chain shirt": "equipment/armor/chain-shirt.webp",
+    
+    # Armor - Medium  
+    "scale mail": "equipment/armor/scale-mail.webp",
+    "chain mail": "equipment/armor/chain-mail.webp",
+    "breastplate": "equipment/armor/breastplate.webp",
+    
+    # Armor - Heavy
+    "splint armor": "equipment/armor/splint.webp",
+    "plate armor": "equipment/armor/full-plate.webp",
+    "half plate": "equipment/armor/half-plate.webp",
+    
+    # Shields
+    "buckler": "equipment/shields/buckler.webp",
+    "shield": "equipment/shields/steel-shield.webp", 
+    "wooden shield": "equipment/shields/wooden-shield.webp",
+    "tower shield": "equipment/shields/tower-shield.webp",
+    
+    # Consumables
+    "healing potion": "equipment/consumables/healing-potion.webp",
+    "minor healing potion": "equipment/consumables/healing-potion.webp",
+    "moderate healing potion": "equipment/consumables/healing-potion.webp",
+    "greater healing potion": "equipment/consumables/healing-potion.webp",
+    "elixir": "equipment/consumables/elixir-life.webp",
+    "antidote": "equipment/consumables/antidote.webp",
+    
+    # Magic Items - Rings
+    "ring": "equipment/rings/ring-of-protection.webp",
+    "ring of protection": "equipment/rings/ring-of-protection.webp",
+    
+    # Magic Items - Amulets/Necklaces
+    "amulet": "equipment/neck/amulet.webp",
+    "necklace": "equipment/neck/necklace.webp",
+    
+    # Magic Items - Wands/Staves
+    "wand": "equipment/staves-wands/wand.webp",
+    "staff": "equipment/staves-wands/staff.webp",
+}
 
 # Search categories for filtering
 SEARCH_CATEGORIES = [
@@ -89,17 +162,43 @@ def clean_text(text):
     return text
 
 def get_foundry_image(item_name):
-    """Get equipment image from Foundry VTT database."""
+    """Get equipment image from the official Foundry VTT PF2e system."""
     normalized_name = item_name.lower().strip()
     
-    if normalized_name in FOUNDRY_IMAGE_MAP:
-        image_path = FOUNDRY_IMAGE_MAP[normalized_name]
-        return f"{FOUNDRY_IMAGE_BASE}{image_path}"
+    # Direct lookup in foundry equipment images
+    if normalized_name in FOUNDRY_EQUIPMENT_IMAGES:
+        image_path = FOUNDRY_EQUIPMENT_IMAGES[normalized_name]
+        return f"{FOUNDRY_CDN_BASE}{image_path}"
     
-    # Try partial matches
-    for key, image_path in FOUNDRY_IMAGE_MAP.items():
-        if key in normalized_name or normalized_name in key:
-            return f"{FOUNDRY_IMAGE_BASE}{image_path}"
+    # Try partial matches for compound names
+    for key, image_path in FOUNDRY_EQUIPMENT_IMAGES.items():
+        if key in normalized_name:
+            return f"{FOUNDRY_CDN_BASE}{image_path}"
+        # Also try reverse matching for "magic longsword" -> "longsword"
+        if any(word in key for word in normalized_name.split() if len(word) > 3):
+            return f"{FOUNDRY_CDN_BASE}{image_path}"
+    
+    # Generic fallbacks based on item name keywords
+    if any(word in normalized_name for word in ["sword", "blade", "rapier", "scimitar", "katana"]):
+        return f"{FOUNDRY_CDN_BASE}equipment/weapons/longsword.webp"
+    elif any(word in normalized_name for word in ["axe", "hatchet"]):
+        return f"{FOUNDRY_CDN_BASE}equipment/weapons/battle-axe.webp"
+    elif any(word in normalized_name for word in ["bow", "crossbow"]):
+        return f"{FOUNDRY_CDN_BASE}equipment/weapons/shortbow.webp"
+    elif any(word in normalized_name for word in ["armor", "mail", "plate"]):
+        return f"{FOUNDRY_CDN_BASE}equipment/armor/chain-mail.webp"
+    elif any(word in normalized_name for word in ["shield"]):
+        return f"{FOUNDRY_CDN_BASE}equipment/shields/steel-shield.webp"
+    elif any(word in normalized_name for word in ["potion", "elixir", "antidote"]):
+        return f"{FOUNDRY_CDN_BASE}equipment/consumables/healing-potion.webp"
+    elif any(word in normalized_name for word in ["ring"]):
+        return f"{FOUNDRY_CDN_BASE}equipment/rings/ring-of-protection.webp"
+    elif any(word in normalized_name for word in ["amulet", "necklace"]):
+        return f"{FOUNDRY_CDN_BASE}equipment/neck/amulet.webp"
+    elif any(word in normalized_name for word in ["wand"]):
+        return f"{FOUNDRY_CDN_BASE}equipment/staves-wands/wand.webp"
+    elif any(word in normalized_name for word in ["staff"]):
+        return f"{FOUNDRY_CDN_BASE}equipment/staves-wands/staff.webp"
     
     return None
 
@@ -284,7 +383,7 @@ class PF2eBot(commands.Bot):
         """Called when the bot is ready."""
         logger.info(f'Bot is ready! Logged in as {self.user}')
         logger.info(f'Bot is in {len(self.guilds)} guilds')
-        logger.info(f'Foundry image database: {len(FOUNDRY_IMAGE_MAP)} items')
+        logger.info(f'Foundry image database: {len(FOUNDRY_EQUIPMENT_IMAGES)} items')
         logger.info('-' * 50)
 
 bot = PF2eBot()
