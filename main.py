@@ -163,8 +163,57 @@ async def search_aon_api(query: str, result_limit: int = 5, category_filter: str
         logger.error(f"Search error for query '{query}': {e}")
         return []
 
+def parse_traits_from_text(text):
+    """Extract traits from item text."""
+    traits = []
+    # Look for trait patterns in parentheses or specific formatting
+    trait_patterns = [
+        r'\bbackswing\b', r'\bdisarm\b', r'\breach\b', r'\btrip\b', r'\bfinesse\b',
+        r'\bagile\b', r'\bdeadly\b', r'\bfatal\b', r'\bversatile\b', r'\bparry\b',
+        r'\btwo-hand\b', r'\bthrown\b', r'\branged\b', r'\bvolley\b'
+    ]
+    
+    for pattern in trait_patterns:
+        if re.search(pattern, text, re.IGNORECASE):
+            trait_name = pattern.replace(r'\b', '').replace(r'\\', '')
+            traits.append(trait_name.title())
+    
+    return traits
+
+def parse_weapon_stats(text, result):
+    """Parse weapon-specific stats from text."""
+    stats = {}
+    
+    # Extract damage (look for patterns like "1d8", "1d6+1", etc.)
+    damage_match = re.search(r'(\d+d\d+(?:\+\d+)?)\s*(\w+)?', text, re.IGNORECASE)
+    if damage_match:
+        damage_die = damage_match.group(1)
+        damage_type = damage_match.group(2) or "bludgeoning"
+        stats['damage'] = f"{damage_die} {damage_type.lower()}"
+    
+    # Extract bulk (look for "Bulk" followed by number or L)
+    bulk_match = re.search(r'bulk\s*([0-9]+|L|-)', text, re.IGNORECASE)
+    if bulk_match:
+        stats['bulk'] = bulk_match.group(1)
+    
+    # Extract hands (look for "Hands" or common patterns)
+    hands_match = re.search(r'hands?\s*(\d+)', text, re.IGNORECASE)
+    if hands_match:
+        stats['hands'] = hands_match.group(1)
+    elif 'two-hand' in text.lower():
+        stats['hands'] = '2'
+    elif 'one-hand' in text.lower():
+        stats['hands'] = '1'
+    
+    # Try to extract group information
+    group_match = re.search(r'group\s+(\w+)', text, re.IGNORECASE)
+    if group_match:
+        stats['group'] = group_match.group(1).lower()
+    
+    return stats
+
 def create_embed_from_result(result, other_results=None):
-    """Create a Discord embed from a search result."""
+    """Create a Discord embed from a search result matching the exact style."""
     
     embed = discord.Embed(
         color=discord.Color.dark_grey()
@@ -174,7 +223,7 @@ def create_embed_from_result(result, other_results=None):
     if result.get('type'):
         embed.set_author(name=result['type'])
     
-    # Main title
+    # Main title with rarity
     title = result['name']
     if result.get('rarity') and result['rarity'].lower() != 'common':
         title = f"{result['name']} ({result['rarity']})"
@@ -183,56 +232,113 @@ def create_embed_from_result(result, other_results=None):
     if result.get('url'):
         embed.url = result['url']
     
-    # Build the stats section (like the traits and stats)
-    stats_parts = []
-    
-    # Extract traits from the text if available (this might need adjustment based on data structure)
+    # Get the raw text for parsing
     text = clean_text(result.get('text', ''))
     
-    # Add basic stats
-    if result.get('price'):
-        stats_parts.append(f"**Price** {result['price']}")
+    # Parse traits and weapon stats
+    traits = parse_traits_from_text(text)
+    weapon_stats = parse_weapon_stats(text, result)
     
+    # Build the stats section exactly like the image
+    stats_lines = []
+    
+    # Add traits in brackets if found
+    if traits:
+        trait_string = "  ".join([f"[ {trait} ]" for trait in traits])
+        stats_lines.append(trait_string)
+    
+    # Add level (important for items, spells, feats)
     if result.get('level'):
-        stats_parts.append(f"**Level** {result['level']}")
+        stats_lines.append(f"**Level** {result['level']}")
     
+    # Add price
+    if result.get('price'):
+        stats_lines.append(f"**Price** {result['price']}")
+    
+    # Add bulk and hands on same line if available (weapon-specific)
+    bulk_hands_parts = []
+    if weapon_stats.get('bulk'):
+        bulk_hands_parts.append(f"Bulk {weapon_stats['bulk']}")
+    if weapon_stats.get('hands'):
+        bulk_hands_parts.append(f"Hands {weapon_stats['hands']}")
+    if bulk_hands_parts:
+        stats_lines.append("**" + "; ".join(bulk_hands_parts) + "**")
+    
+    # Add damage (weapon-specific)
+    if weapon_stats.get('damage'):
+        stats_lines.append(f"**Damage** {weapon_stats['damage']}")
+    
+    # Add category and group
+    category_parts = []
     if result.get('category'):
-        stats_parts.append(f"**Category** {result['category']}")
+        category_parts.append(result['category'])
+    if weapon_stats.get('group'):
+        category_parts.append(f"Group {weapon_stats['group']}")
+    if category_parts:
+        stats_lines.append("**Category** " + "; ".join(category_parts))
     
-    # If we have stats, add them as a field
-    if stats_parts:
+    # Add type as a separate field if it's not already shown and is important
+    item_type = result.get('type')
+    if item_type and item_type.lower() not in ['equipment', 'item']:
+        stats_lines.append(f"**Type** {item_type}")
+    
+    # Add rarity as a separate line if it's not common
+    if result.get('rarity') and result['rarity'].lower() != 'common':
+        stats_lines.append(f"**Rarity** {result['rarity']}")
+    
+    # Add stats section
+    if stats_lines:
         embed.add_field(
-            name="\u200b",  # Invisible character
-            value="\n".join(stats_parts),
+            name="\u200b",
+            value="\n".join(stats_lines),
             inline=False
         )
     
-    # Add a separator line (using Unicode box drawing)
+    # Add separator line
     embed.add_field(
         name="\u200b",
-        value="─" * 50,
+        value="─" * 45,
         inline=False
     )
     
-    # Main description
-    if text:
-        if len(text) > 1000:
-            text = text[:1000] + "..."
+    # Extract main description (usually the paragraph after stats)
+    # Try to find the descriptive text by removing stat lines
+    description_text = text
+    
+    # Remove common stat patterns to get clean description
+    description_text = re.sub(r'price\s*:?\s*\d+\s*\w*', '', description_text, flags=re.IGNORECASE)
+    description_text = re.sub(r'bulk\s*:?\s*[0-9L-]+', '', description_text, flags=re.IGNORECASE)
+    description_text = re.sub(r'hands?\s*:?\s*\d+', '', description_text, flags=re.IGNORECASE)
+    description_text = re.sub(r'damage\s*:?\s*\d+d\d+\s*\w+', '', description_text, flags=re.IGNORECASE)
+    description_text = re.sub(r'category\s*:?[^.]*', '', description_text, flags=re.IGNORECASE)
+    description_text = re.sub(r'group\s*:?\s*\w+', '', description_text, flags=re.IGNORECASE)
+    description_text = re.sub(r'level\s*:?\s*\d+', '', description_text, flags=re.IGNORECASE)
+    description_text = re.sub(r'rarity\s*:?\s*\w+', '', description_text, flags=re.IGNORECASE)
+    description_text = description_text.strip()
+    
+    # Add main description
+    if description_text:
+        if len(description_text) > 1000:
+            description_text = description_text[:1000] + "..."
         embed.add_field(
             name="\u200b",
-            value=text,
+            value=description_text,
+            inline=False
+        )
+    else:
+        # Fallback to "No description available" if we can't extract clean text
+        embed.add_field(
+            name="\u200b",
+            value="No description available.",
             inline=False
         )
     
-    # Source information at the bottom
-    source_parts = []
+    # Add source information at the bottom
     if result.get('source'):
-        source_parts.append(f"**Source:** {result['source']}")
-    
-    if source_parts:
+        source_text = f"**{result['source']}**"
         embed.add_field(
             name="\u200b",
-            value=" • ".join(source_parts),
+            value=source_text,
             inline=False
         )
     
