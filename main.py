@@ -239,75 +239,96 @@ def first_after(label: str, text: str) -> Optional[str]:
 def main_desc(text: str) -> str:
     sents = [s.strip() for s in text.split(".") if len(s.strip()) > 15]
     keep = [s for s in sents if not any(k in s.lower() for k in ("source", "favored weapon", "specific magic", "price", "bulk", "hands", "damage", "category"))]
-    return (". ".join(keep[:2]) + ".") if keep else "A martial weapon used in combat."
+    return (". ".join(keep[:2]) + ".") if keep else "No description available."
 
+def get_rarity_color(rarity: str | None) -> discord.Color:
+    rarity = (rarity or "common").lower()
+    if rarity == "uncommon":
+        return discord.Color.blue()
+    if rarity == "rare":
+        return discord.Color.purple()
+    if rarity == "unique":
+        return discord.Color.gold()
+    return discord.Color.default()
 
-def format_result(res: dict) -> str:
+def format_weapon_embed(res: dict) -> discord.Embed:
+    raw = clean_text(res.get("text"))
+    stats = parse_weapon_stats(raw)
+    traits = parse_traits(raw)
+    color = get_rarity_color(res.get("rarity"))
+    embed = discord.Embed(
+        title=res.get("name", "Unknown"),
+        url=res.get("url"),
+        description=main_desc(raw),
+        color=color
+    )
+    embed.add_field(name="Traits", value="".join(f"［ {t} ］" for t in traits) or "None", inline=True)
+    embed.add_field(name="Core Stats", value=f"**Price:** {res.get('price', 'N/A')}\n**Bulk:** {stats.get('bulk', 'N/A')}\n**Hands:** {stats.get('hands', 'N/A')}", inline=True)
+    embed.add_field(
+        name="Combat Stats",
+        value=f"**Damage:** {stats.get('damage', 'N/A')}\n**Category:** {res.get('category', 'N/A')}\n**Group:** {stats.get('group', 'N/A')}",
+        inline=True
+    )
+    group_title = stats.get("group", "Unknown").title()
+    embed.add_field(
+        name=f"Critical Specialization ({group_title} Group)",
+        value=crit_effect(stats.get("group")),
+        inline=False
+    )
+    favored_weapon_text = first_after("favored weapon", raw)
+    if favored_weapon_text:
+        embed.add_field(name="Favored Weapon of", value=favored_weapon_text, inline=True)
+    specific_magic_text = first_after("specific magic", raw)
+    if specific_magic_text:
+        embed.add_field(name=f"Specific Magic {plural(res['name'])}", value=specific_magic_text, inline=True)
+    embed.set_footer(text=f"🔗 Data from Archives of Nethys | Source: {res.get('source', 'N/A')}")
+    return embed
+
+def format_spell_embed(res: dict) -> discord.Embed:
     raw = clean_text(res.get("text"))
     traits = parse_traits(raw)
-    stats = parse_weapon_stats(raw)
+    color = get_rarity_color(res.get("rarity"))
+    embed = discord.Embed(
+        title=res.get("name", "Unknown"),
+        url=res.get("url"),
+        description=main_desc(raw),
+        color=color
+    )
+    embed.add_field(name="Traits", value="".join(f"［ {t} ］" for t in traits) or "None", inline=False)
+    if res.get('level'):
+        embed.add_field(name="Level", value=str(res.get('level')), inline=True)
+    embed.set_footer(text=f"🔗 Data from Archives of Nethys | Source: {res.get('source', 'N/A')}")
+    return embed
+
+def format_default_embed(res: dict) -> discord.Embed:
+    raw = clean_text(res.get("text"))
+    traits = parse_traits(raw)
+    color = get_rarity_color(res.get("rarity"))
+    embed = discord.Embed(
+        title=res.get("name", "Unknown"),
+        url=res.get("url"),
+        description=main_desc(raw),
+        color=color
+    )
+    embed.add_field(name="Traits", value="".join(f"［ {t} ］" for t in traits) or "None", inline=False)
+    if res.get("level"):
+        embed.add_field(name="Level", value=str(res.get("level")), inline=True)
+    if res.get("category"):
+        embed.add_field(name="Category", value=res.get("category"), inline=True)
+    embed.set_footer(text=f"🔗 Data from Archives of Nethys | Source: {res.get('source', 'N/A')}")
+    return embed
+
+def format_result_embed(res: dict) -> discord.Embed:
     type_ = (res.get("type") or "").lower()
     category = (res.get("category") or "").lower()
 
-    lines: List[str] = ["****Item****"]
-    name_line = res["name"]
-    if res.get("rarity") and res["rarity"].lower() != "common":
-        name_line += f" ({res['rarity']})"
-    lines.append(f"**{name_line}**")
-    lines.append("".join(f"［ {t} ］" for t in traits) or "None")
-
-    # Equipment/Weapon
     if type_ == "weapon" or category == "weapon":
-        lines.append(f"**Price** {res.get('price', 'Unknown')}")
-        lines.append(f"**Bulk** {stats.get('bulk', 'Unknown')}; **Hands** {stats.get('hands', '1')}")
-        lines.append(f"**Damage** {stats.get('damage', 'Unknown')}")
-        lines.append(f"**Category** {res.get('category', 'weapon')}; **Group** {stats.get('group', 'unknown')}")
-        lines.append("⎯" * 30)
-        lines.append(main_desc(raw))
-        lines.append("")
-        lines.append(f"📘 **Source:** {res.get('source', 'Unknown')}")
-        lines.append("")
-        lines.append("****Favored Weapon of****")
-        lines.append(first_after("favored weapon", raw) or "None")
-        lines.append("")
-        group_title = stats.get("group", "Unknown").title()
-        lines.append(f"****Critical Specialization Effect ({group_title} Group):****")
-        lines.append(crit_effect(stats.get("group")))
-        lines.append("")
-        lines.append(f"****Specific Magic {plural(res['name'])}:****")
-        lines.append(first_after("specific magic", raw) or "None")
-    # Spell
-    elif type_ == "spell":
-        lines.append(f"**Level** {res.get('level', 'Unknown')}")
-        lines.append(f"**Source** {res.get('source', 'Unknown')}")
-        lines.append("⎯" * 30)
-        lines.append(main_desc(raw))
-    # Feat
-    elif type_ == "feat":
-        lines.append(f"**Level** {res.get('level', 'Unknown')}")
-        lines.append(f"**Source** {res.get('source', 'Unknown')}")
-        lines.append("⎯" * 30)
-        lines.append(main_desc(raw))
-    # Class, Ancestry, Background, Monster, etc.
-    else:
-        if res.get("level"):
-            lines.append(f"**Level** {res.get('level')}")
-        if res.get("source"):
-            lines.append(f"**Source** {res.get('source')}")
-        lines.append("⎯" * 30)
-        lines.append(main_desc(raw))
-    lines.append("")
-    lines.append("🔗 Data from Archives of Nethys")
-    if res.get("url"):
-        lines.append(res["url"])
-    return "\n".join(lines)
+        return format_weapon_embed(res)
+    if type_ == "spell":
+        return format_spell_embed(res)
+    return format_default_embed(res)
 
 # ── Discord helpers ──────────────────────────────────────────
-
-def chunk_send(inter: discord.Interaction, text: str):
-    """Yield chunks <= 1900 chars (keeping code healthy)."""
-    for i in range(0, len(text), 1900):
-        yield text[i:i + 1900]
 
 # ── Autocomplete data ────────────────────────────────────────
 POPULAR_TERMS = [
@@ -353,16 +374,15 @@ async def cmd_search(inter: discord.Interaction, query: str, category: Optional[
         results = await search_aon_api(query, category_filter=category)
     except Exception as exc:
         logger.error("search error: %s", exc)
-        await safe_followup(inter, "Error while searching. Please try again later.")
+        await safe_followup(inter, content="Error while searching. Please try again later.")
         return
 
     if not results:
-        await safe_followup(inter, f"**No results found for `{query}`**")
+        await safe_followup(inter, content=f"**No results found for `{query}`**")
         return
 
-    text = format_result(results[0])
-    for chunk in chunk_send(inter, text):
-        await safe_followup(inter, chunk)
+    embed = format_result_embed(results[0])
+    await safe_followup(inter, embed=embed)
 
 # safe helpers for follow‑ups and defer
 async def interaction_response_defer_safe(inter: discord.Interaction):
@@ -372,10 +392,13 @@ async def interaction_response_defer_safe(inter: discord.Interaction):
         except Exception:
             pass
 
-async def safe_followup(inter: discord.Interaction, content: str):
-    target = inter.followup if inter.response.is_done() else inter.response
+async def safe_followup(inter: discord.Interaction, content: str | None = None, *, embed: discord.Embed | None = None):
+    target = inter.followup if inter.response.is_done() else inter.response.send_message
     try:
-        await target.send(content)
+        if embed:
+            await target(embed=embed)
+        elif content:
+            await target(content)
     except Exception as err:
         logger.error("follow‑up failed: %s", err)
 
