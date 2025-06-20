@@ -205,6 +205,36 @@ CRIT_EFFECTS = {
 def crit_effect(group: str | None) -> str:
     return CRIT_EFFECTS.get((group or "").lower(), "No specific effect for this weapon group.")
 
+def format_traits(traits: List[str], base_damage_str: str | None = None) -> str:
+    if not traits:
+        return "None"
+
+    base_type = ""
+    if base_damage_str and ' ' in base_damage_str:
+        base_type = base_damage_str.split()[-1]
+
+    descriptions = {
+        "versatile p": "piercing",
+        "versatile s": "slashing",
+        "versatile b": "bludgeoning"
+    }
+
+    formatted_traits = []
+    for trait in traits:
+        lower_trait = trait.lower()
+        if lower_trait in descriptions:
+            alt_type = descriptions[lower_trait]
+            display_trait = f"Versatile {lower_trait.split()[-1].upper()}"
+            desc = f"**{display_trait}:** Can be used to deal {alt_type} damage"
+            if base_type and base_type != alt_type:
+                desc += f" instead of its normal {base_type} damage"
+            desc += ". You choose the damage type each time you attack."
+            formatted_traits.append(desc)
+        else:
+            formatted_traits.append(f"`{trait}`")
+            
+    return " ".join(formatted_traits)
+
 # ── Formatting helpers ───────────────────────────────────────
 
 def plural(word: str) -> str:
@@ -222,7 +252,7 @@ def main_desc(text: str) -> str:
     sents = [s.strip() for s in text.split(".") if len(s.strip()) > 15]
     bad_keywords = (
         "source", "favored weapon", "specific magic", "price", "bulk", "hands",
-        "damage", "category", "group", "type", "level"
+        "damage", "category", "group", "type", "level", "critical success"
     )
     keep = [s for s in sents if not any(k in s.lower() for k in bad_keywords)]
     desc = (". ".join(keep[:2]) + ".") if keep else "No description available."
@@ -252,18 +282,33 @@ def format_weapon_embed(res: dict) -> discord.Embed:
         description=main_desc(raw),
         color=color
     )
-    embed.add_field(name="Traits", value=truncate(" ".join(f"`{t}`" for t in traits) or "None", 1024), inline=False)
-    stats_text = (
-        f"**Price:** {res.get('price', 'N/A')}\n"
-        f"**Damage:** {stats.get('damage', 'N/A')}\n"
-        f"**Bulk:** {stats.get('bulk', 'N/A')}; **Hands:** {stats.get('hands', 'N/A')}\n"
-        f"**Group:** {stats.get('group', 'N/A')}; **Category:** {res.get('category', 'N/A')}"
-    )
-    embed.add_field(name="Statistics", value=stats_text, inline=False)
-    group_title = stats.get("group", "Unknown").title()
+    damage_str = stats.get('damage')
+    embed.add_field(name="Traits", value=truncate(format_traits(traits, damage_str), 1024), inline=False)
+
+    prop_text = f"**Price** {res.get('price', 'N/A')}"
+    if (level := res.get('level')) is not None:
+        prop_text += f"\n**Level** {level}"
+    prop_text += f"\n**Bulk** {stats.get('bulk', 'N/A')}"
+    embed.add_field(name="Properties", value=prop_text, inline=True)
+
+    combat_text = f"**Damage** {stats.get('damage', 'N/A')}\n**Hands** {stats.get('hands', 'N/A')}"
+    embed.add_field(name="Combat", value=combat_text, inline=True)
+
+    class_text = f"**Group** {stats.get('group', 'N/A').title()}\n**Category** {res.get('category', 'N/A').title()}"
+    embed.add_field(name="Classification", value=class_text, inline=True)
+
+    group = stats.get("group")
+    effect = crit_effect(group)
+
+    crit_value = effect
+    if "No specific effect" not in effect:
+        crit_explanation = "Certain feats, class features, and other effects can grant additional benefits on a critical success."
+        crit_value = f"{crit_explanation}\n\n{effect}"
+
+    group_title = (group or "Unknown").title()
     embed.add_field(
         name=f"Critical Specialization ({group_title} Group)",
-        value=crit_effect(stats.get("group")),
+        value=crit_value,
         inline=False
     )
     favored_weapon_text = first_after("favored weapon", raw)
@@ -424,3 +469,4 @@ if __name__ == "__main__":
         bot.run(TOKEN)
     except discord.errors.LoginFailure:
         logger.error("Invalid token — check DISCORD_TOKEN/DiscordOracle.")
+
