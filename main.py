@@ -284,10 +284,55 @@ def plural(word: str) -> str:
 
 
 def first_after(label: str, text: str) -> Optional[str]:
-    pat = re.compile(fr"{label}[^.\n]*?([A-Z][^.\n]+)", re.I)
-    if (m := pat.search(text)):
-        return WS_RE.sub(" ", m.group(1).strip())
-    return None
+    """
+    Finds the text immediately following a given label in a block of text.
+    It stops parsing when it hits another known section label or a separator.
+    """
+    # Use a case-insensitive search for the label
+    match = re.search(fr"\b{re.escape(label)}\b", text, re.IGNORECASE)
+    if not match:
+        return None
+
+    # The content starts after the matched label
+    start_index = match.end()
+    
+    # We strip away any colons or whitespace that might follow the label
+    content_part = text[start_index:].lstrip(": ")
+
+    # Define keywords that mark the beginning of a new, unrelated section.
+    # The search for these should be case-insensitive.
+    stop_keywords = [
+        "price", "damage", "bulk", "hands", "type", "category", "group", 
+        "critical specialization", "favored weapon", "specific magic", 
+        "source", "ammunition", "reload", "range", "---", "level"
+    ]
+
+    # Find the earliest occurrence of any stop keyword in the rest of the text.
+    end_index = len(content_part)
+    lower_content = content_part.lower()
+
+    for keyword in stop_keywords:
+        # Don't let the label stop itself if it appears in the content
+        if keyword in label.lower():
+            continue
+        
+        try:
+            # Find the position of the keyword
+            found_pos = lower_content.index(keyword)
+            # We want the *earliest* stop position
+            end_index = min(end_index, found_pos)
+        except ValueError:
+            # The keyword wasn't found, so we continue
+            continue
+            
+    # Extract the substring and clean up any trailing whitespace or punctuation
+    result = content_part[:end_index].strip().rstrip(".,;")
+    
+    # If the result is just a single character (like a leftover letter), it's probably junk.
+    if len(result) <= 1:
+        return None
+
+    return result
 
 
 def get_rarity_color(rarity: str | None) -> discord.Color:
