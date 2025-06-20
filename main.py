@@ -266,11 +266,15 @@ def format_weapon_embed(res: dict) -> discord.Embed:
         description=main_desc(raw),
         color=color
     )
-    embed.add_field(name="Traits", value=truncate("".join(f"［ {t} ］" for t in traits) or "None", 1024), inline=True)
-    embed.add_field(name="Core Stats", value=f"**Price:** {res.get('price', 'N/A')}\n**Bulk:** {stats.get('bulk', 'N/A')}\n**Hands:** {stats.get('hands', 'N/A')}", inline=True)
+    embed.add_field(name="Traits", value=truncate(" ".join(f"`{t}`" for t in traits) or "None", 1024), inline=False)
     embed.add_field(
-        name="Combat Stats",
-        value=f"**Damage:** {stats.get('damage', 'N/A')}\n**Category:** {res.get('category', 'N/A')}\n**Group:** {stats.get('group', 'N/A')}",
+        name="Core Stats",
+        value=f"**Price:** {res.get('price', 'N/A')}\n**Bulk:** {stats.get('bulk', 'N/A')}\n**Hands:** {stats.get('hands', 'N/A')}",
+        inline=True
+    )
+    embed.add_field(
+        name="Damage & Group",
+        value=f"**Damage:** {stats.get('damage', 'N/A')}\n**Group:** {stats.get('group', 'N/A')}\n**Category:** {res.get('category', 'N/A')}",
         inline=True
     )
     group_title = stats.get("group", "Unknown").title()
@@ -298,7 +302,7 @@ def format_spell_embed(res: dict) -> discord.Embed:
         description=main_desc(raw),
         color=color
     )
-    embed.add_field(name="Traits", value=truncate("".join(f"［ {t} ］" for t in traits) or "None", 1024), inline=False)
+    embed.add_field(name="Traits", value=truncate(" ".join(f"`{t}`" for t in traits) or "None", 1024), inline=False)
     if res.get('level'):
         embed.add_field(name="Level", value=str(res.get('level')), inline=True)
     embed.set_footer(text=f"🔗 Data from Archives of Nethys | Source: {res.get('source', 'N/A')}")
@@ -314,7 +318,7 @@ def format_default_embed(res: dict) -> discord.Embed:
         description=main_desc(raw),
         color=color
     )
-    embed.add_field(name="Traits", value=truncate("".join(f"［ {t} ］" for t in traits) or "None", 1024), inline=False)
+    embed.add_field(name="Traits", value=truncate(" ".join(f"`{t}`" for t in traits) or "None", 1024), inline=False)
     if res.get("level"):
         embed.add_field(name="Level", value=str(res.get("level")), inline=True)
     if res.get("category"):
