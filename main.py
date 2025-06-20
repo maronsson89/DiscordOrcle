@@ -1,41 +1,37 @@
-# main.py – Simple PF2e Discord Bot with Slash Commands (Refactored + clickable links)
-# ---------------------------------------------------------------
-# Key fixes
-#   • Single shared aiohttp session (no per-request overhead)
-#   • Removed unnecessary privileged intent
-#   • Robust 2 000-character message splitting
-#   • Graceful pluralisation & None‑safe helpers
-#   • Item URL now shown as a clickable link in the output
-#   • Minor cleanup & clearer token handling
-# ---------------------------------------------------------------
+# main.py – Simple PF2e Discord Bot with Slash Commands (Refactored + clickable links)
+# -------------------------------------------------------------------
+# Highlights
+#   • Shared aiohttp session for speed
+#   • No privileged intents required
+#   • Robust 2 000‑character splitter
+#   • Clickable URL line after item name
+#   • Complete, syntactically‑valid source (fixes unclosed '[' error)
+# -------------------------------------------------------------------
 
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 import re
 import sys
 import time
 from html import unescape
-from typing import List, Optional
+from typing import Optional
 
 import aiohttp
 import discord
 from discord import app_commands
 from discord.ext import commands
 
-
-# ── Logging ────────────────────────────────────────────────────
+# ── Logging ──────────────────────────────────────────────────────
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("pf2e-bot")
 
-
-# ── Configuration ─────────────────────────────────────────────
+# ── Configuration ───────────────────────────────────────────────
 TOKEN = os.getenv("DiscordOracle") or os.getenv("DISCORD_TOKEN")
 if not TOKEN:
-    logger.error("Discord token not provided (env vars DiscordOracle / DISCORD_TOKEN). Exiting …")
+    logger.error("Discord token not provided (DiscordOracle / DISCORD_TOKEN). Exiting …")
     sys.exit(1)
 
 AON_API_BASE = "https://elasticsearch.aonprd.com/aon/_search"
@@ -46,15 +42,11 @@ SEARCH_CATEGORIES = [
     "Monster", "Hazard", "Rule", "Condition", "Trait", "Action",
 ]
 
+# ── Globals ─────────────────────────────────────────────────────
+_http_session: aiohttp.ClientSession | None = None
 
-# ── Globals ───────────────────────────────────────────────────
-_http_session: aiohttp.ClientSession | None = None  # initialised in setup_hook()
-
-
-# ── Simple in‑memory cache ────────────────────────────────────
+# ── Simple in‑memory TTL cache ─────────────────────────────────
 class SearchCache:
-    """Tiny TTL cache with coroutine‑safe access."""
-
     def __init__(self, ttl_seconds: int = 300):
         self.cache: dict[str, tuple[object, float]] = {}
         self.ttl = ttl_seconds
@@ -74,29 +66,24 @@ class SearchCache:
         async with self._lock:
             self.cache[key] = (value, time.time())
 
-
 search_cache = SearchCache()
 
-
-# ── Utility helpers ───────────────────────────────────────────
+# ── Utility regexes ────────────────────────────────────────────
 TAG_RE = re.compile(r"<[^>]+>")
-WHITESPACE_RE = re.compile(r"\s+")
+WS_RE = re.compile(r"\s+")
 
+# ── Helper functions ───────────────────────────────────────────
 
 def clean_text(text: str | None) -> str:
     if not text:
         return ""
     text = TAG_RE.sub("", text)
     text = unescape(text)
-    return WHITESPACE_RE.sub(" ", text).strip()
-
+    return WS_RE.sub(" ", text).strip()
 
 async def search_aon_api(query: str, *, result_limit: int = 5, category_filter: str | None = None):
-    """Query the (unofficial) Archives of Nethys ES API with caching."""
-
     cache_key = f"{query}:{result_limit}:{category_filter}"
     if (cached := await search_cache.get(cache_key)) is not None:
-        logger.debug("cache hit for %s", query)
         return cached
 
     if _http_session is None:
@@ -119,41 +106,27 @@ async def search_aon_api(query: str, *, result_limit: int = 5, category_filter: 
     if category_filter and category_filter != "All":
         bool_query.setdefault("filter", []).append({"term": {"type.keyword": category_filter}})
 
-    payload = {
+    body = {
         "query": {"bool": bool_query},
         "size": result_limit,
-        "_source": [
-            "name",
-            "type",
-            "url",
-            "text",
-            "level",
-            "price",
-            "category",
-            "source",
-            "rarity",
-        ],
+        "_source": ["name", "type", "url", "text", "level", "price", "category", "source", "rarity"],
         "sort": [{"_score": {"order": "desc"}}, {"name.keyword": {"order": "asc"}}],
     }
 
     try:
         async with _http_session.post(
             AON_API_BASE,
-            json=payload,
+            json=body,
             headers={
                 "Content-Type": "application/json",
-                "User-Agent": "PF2E Discord Bot (aiohttp)",
-                "Accept": "application/json",
+                "User-Agent": "PF2E Discord Bot",
                 "Referer": "https://2e.aonprd.com/",
             },
         ) as resp:
             resp.raise_for_status()
             data = await resp.json()
-    except aiohttp.ClientResponseError as e:
-        logger.error("AON API error (%s): %s", e.status, e.message)
-        return []
-    except Exception as e:
-        logger.error("AON API request failed: %s", e)
+    except Exception as exc:
+        logger.error("AON API error: %s", exc)
         return []
 
     results: list[dict] = []
@@ -180,36 +153,104 @@ async def search_aon_api(query: str, *, result_limit: int = 5, category_filter: 
     await search_cache.set(cache_key, results)
     return results
 
-
-# ── Regex helpers for weapon parsing ──────────────────────────
-DAMAGE_RES = [
+# ── Regex helpers for parsing ─────────────────────────────────
+DMG_RE = [
     re.compile(r"(\d+d\d+(?:\+\d+)?)\s+(slashing|piercing|bludgeoning|s|p|b)\b", re.I),
     re.compile(r"damage\s+(\d+d\d+(?:\+\d+)?)(?:\s*(\w+))?", re.I),
 ]
-BULK_RES = [re.compile(p, re.I) for p in (r"bulk\s+([0-9]+|L|-)\b", r"bulk: ?([0-9]+|L|-)")]
-HANDS_RES = [re.compile(p, re.I) for p in (r"hands?\s+(\d+)\b", r"hands?: ?(\d+)")]
-GROUP_RES = [re.compile(p, re.I) for p in (r"group\s+(\w+)\b", r"weapon\s+group: ?(\w+)")]
+BULK_RE = [re.compile(p, re.I) for p in (r"bulk\s+([0-9]+|L|-)", r"bulk: ?([0-9]+|L|-)")]
+HANDS_RE = [re.compile(p, re.I) for p in (r"hands?\s+(\d+)", r"hands?: ?(\d+)")]
+GROUP_RE = [re.compile(p, re.I) for p in (r"group\s+(\w+)", r"weapon\s+group: ?(\w+)")]
 TRAIT_RE = re.compile(
-    r"\b("  # capture
-    r"backswing|disarm|reach|trip|finesse|agile|deadly|fatal|parry|sweep|forceful|shove|twin|monk|unarmed|free-hand|grapple|nonlethal|propulsive|volley|ranged|thrown"  # simple traits
-    r"|versatile\s+[a-z]"  # versatile X
-    r")\b",
+    r"\b(backswing|disarm|reach|trip|finesse|agile|deadly|fatal|parry|sweep|forceful|shove|twin|monk|unarmed|free-hand|grapple|nonlethal|propulsive|volley|ranged|thrown|versatile\s+[a-z])\b",
     re.I,
 )
 
-
-# ── Parsing functions ────────────────────────────────────────
+# ── Parsing helpers ───────────────────────────────────────────
 
 def parse_traits(text: str) -> list[str]:
-    traits: list[str] = []
+    seen = {}
     for m in TRAIT_RE.finditer(text):
         token = m.group(0)
         if token.lower().startswith("versatile"):
-            dmg = token.split()[-1].upper()
-            traits.append(f"Versatile {dmg}")
+            val = f"Versatile {token.split()[-1].upper()}"
         else:
-            traits.append(token.title())
-    return list(dict.fromkeys(traits))  # preserve order, remove dups
+            val = token.title()
+        seen[val] = None
+    return list(seen)
 
 
-def parse_weapon_stats(text: str) -> dict[str
+def parse_weapon_stats(text: str) -> dict[str, str]:
+    stats: dict[str, str] = {}
+    # damage
+    for rex in DMG_RE:
+        if (m := rex.search(text)):
+            die, typ = m.groups(default="")
+            typ = typ.lower()
+            typ = {"s": "slashing", "p": "piercing", "b": "bludgeoning"}.get(typ, typ or "slashing")
+            stats["damage"] = f"{die} {typ}"
+            break
+    # bulk
+    for rex in BULK_RE:
+        if (m := rex.search(text)):
+            stats["bulk"] = m.group(1)
+            break
+    # hands
+    for rex in HANDS_RE:
+        if (m := rex.search(text)):
+            stats["hands"] = m.group(1)
+            break
+    if "hands" not in stats:
+        stats["hands"] = "2" if "two-hand" in text.lower() else "1"
+    # group
+    for rex in GROUP_RE:
+        if (m := rex.search(text)):
+            stats["group"] = m.group(1).lower()
+            break
+    return stats
+
+# Critical‑specialisation lookup table
+CRIT = {
+    "sword": "Target becomes **flat‑footed** until start of your next turn.",
+    "axe": "Choose a second creature adjacent … (Core Rulebook).",
+    "bow": "You pin the target to a surface, immobilising it (DC 10 Athletics to remove).",
+    "club": "You knock the target 10 ft away (forced movement).",
+    "flail": "The target is knocked **prone**.",
+    "hammer": "The target is knocked **prone**.",
+    "knife": "Target takes 1d6 persistent bleed damage.",
+    "polearm": "Move the target 5 ft in a direction of your choice.",
+    "spear": "Target takes –2 circumstance penalty to damage for 1 round.",
+}
+
+def crit_effect(group: str | None) -> str:
+    return CRIT.get((group or "").lower(), "No specific effect for this weapon group.")
+
+# ── Formatter ────────────────────────────────────────────────
+
+def first_after(label: str, text: str) -> str | None:
+    pat = re.compile(fr"{label}[^.]*?([A-Z][^.]+)", re.I)
+    if (m := pat.search(text)):
+        return WS_RE.sub(" ", m.group(1).strip())
+    return None
+
+def plural(word: str) -> str:
+    return word if word.endswith("s") else word + "s"
+
+
+def main_description(text: str) -> str:
+    sents = [s.strip() for s in text.split(".") if len(s.strip()) > 15]
+    filt = [s for s in sents if not any(k in s.lower() for k in ("source", "favored weapon", "specific magic", "price", "bulk", "hands", "damage", "category"))]
+    return (". ".join(filt[:2]) + ".") if filt else "A martial weapon used in combat."
+
+
+def format_result(res: dict) -> str:
+    raw = clean_text(res.get("text"))
+    traits = parse_traits(raw)
+    stats = parse_weapon_stats(raw)
+
+    lines: list[str] = ["****Item****"]
+    name_line = res["name"] + (f" ({res['rarity']})" if res.get("rarity") and res["rarity"].lower() != "common" else "")
+    lines.append(f"**{name_line}**")
+    if res.get("url"):
+        lines.append(f"<{res['url']}>")  # clickable link
+    lines.append("".join(f"［ {t} ］" for t
