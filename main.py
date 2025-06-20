@@ -246,35 +246,60 @@ def format_result(res: dict) -> str:
     raw = clean_text(res.get("text"))
     traits = parse_traits(raw)
     stats = parse_weapon_stats(raw)
+    type_ = (res.get("type") or "").lower()
+    category = (res.get("category") or "").lower()
 
     lines: List[str] = ["****Item****"]
     name_line = res["name"]
     if res.get("rarity") and res["rarity"].lower() != "common":
         name_line += f" ({res['rarity']})"
     lines.append(f"**{name_line}**")
-    if res.get("url"):
-        lines.append(f"<{res['url']}>")  # clickable link
     lines.append("".join(f"［ {t} ］" for t in traits) or "None")
-    lines.append(f"**Price** {res.get('price', 'Unknown')}")
-    lines.append(f"**Bulk** {stats.get('bulk', 'Unknown')}; **Hands** {stats.get('hands', '1')}")
-    lines.append(f"**Damage** {stats.get('damage', 'Unknown')}")
-    lines.append(f"**Category** {res.get('category', 'weapon')}; **Group** {stats.get('group', 'unknown')}")
-    lines.append("⎯" * 30)
-    lines.append(main_desc(raw))
-    lines.append("")
-    lines.append(f"📘 **Source:** {res.get('source', 'Unknown')}")
-    lines.append("")
-    lines.append("****Favored Weapon of****")
-    lines.append(first_after("favored weapon", raw) or "None")
-    lines.append("")
-    group_title = stats.get("group", "Unknown").title()
-    lines.append(f"****Critical Specialization Effect ({group_title} Group):****")
-    lines.append(crit_effect(stats.get("group")))
-    lines.append("")
-    lines.append(f"****Specific Magic {plural(res['name'])}:****")
-    lines.append(first_after("specific magic", raw) or "None")
+
+    # Equipment/Weapon
+    if type_ == "weapon" or category == "weapon":
+        lines.append(f"**Price** {res.get('price', 'Unknown')}")
+        lines.append(f"**Bulk** {stats.get('bulk', 'Unknown')}; **Hands** {stats.get('hands', '1')}")
+        lines.append(f"**Damage** {stats.get('damage', 'Unknown')}")
+        lines.append(f"**Category** {res.get('category', 'weapon')}; **Group** {stats.get('group', 'unknown')}")
+        lines.append("⎯" * 30)
+        lines.append(main_desc(raw))
+        lines.append("")
+        lines.append(f"📘 **Source:** {res.get('source', 'Unknown')}")
+        lines.append("")
+        lines.append("****Favored Weapon of****")
+        lines.append(first_after("favored weapon", raw) or "None")
+        lines.append("")
+        group_title = stats.get("group", "Unknown").title()
+        lines.append(f"****Critical Specialization Effect ({group_title} Group):****")
+        lines.append(crit_effect(stats.get("group")))
+        lines.append("")
+        lines.append(f"****Specific Magic {plural(res['name'])}:****")
+        lines.append(first_after("specific magic", raw) or "None")
+    # Spell
+    elif type_ == "spell":
+        lines.append(f"**Level** {res.get('level', 'Unknown')}")
+        lines.append(f"**Source** {res.get('source', 'Unknown')}")
+        lines.append("⎯" * 30)
+        lines.append(main_desc(raw))
+    # Feat
+    elif type_ == "feat":
+        lines.append(f"**Level** {res.get('level', 'Unknown')}")
+        lines.append(f"**Source** {res.get('source', 'Unknown')}")
+        lines.append("⎯" * 30)
+        lines.append(main_desc(raw))
+    # Class, Ancestry, Background, Monster, etc.
+    else:
+        if res.get("level"):
+            lines.append(f"**Level** {res.get('level')}")
+        if res.get("source"):
+            lines.append(f"**Source** {res.get('source')}")
+        lines.append("⎯" * 30)
+        lines.append(main_desc(raw))
     lines.append("")
     lines.append("🔗 Data from Archives of Nethys")
+    if res.get("url"):
+        lines.append(res["url"])
     return "\n".join(lines)
 
 # ── Discord helpers ──────────────────────────────────────────
