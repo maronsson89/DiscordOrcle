@@ -70,7 +70,7 @@ search_cache = SearchCache()
 
 # ── Regular expressions ───────────────────────────────────────
 TAG_RE = re.compile(r"<[^>]+>")
-WS_RE = re.compile(r"\s+")
+WS_RE = re.compile(r"[ \t]+")
 DMG_RE = [
     re.compile(r"(\d+d\d+(?:\+\d+)?)\s+(slashing|piercing|bludgeoning|s|p|b)\b", re.I),
     re.compile(r"damage\s+(\d+d\d+(?:\+\d+)?)(?:\s*(\w+))?", re.I),
@@ -212,7 +212,7 @@ def plural(word: str) -> str:
 
 
 def first_after(label: str, text: str) -> Optional[str]:
-    pat = re.compile(fr"{label}[^.]*?([A-Z][^.]+)", re.I)
+    pat = re.compile(fr"{label}[^.\n]*?([A-Z][^.\n]+)", re.I)
     if (m := pat.search(text)):
         return WS_RE.sub(" ", m.group(1).strip())
     return None
@@ -424,4 +424,3 @@ if __name__ == "__main__":
         bot.run(TOKEN)
     except discord.errors.LoginFailure:
         logger.error("Invalid token — check DISCORD_TOKEN/DiscordOracle.")
-
