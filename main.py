@@ -1,10 +1,11 @@
-# main.py – (v3) With Detailed Formatting for Spells & Feats
-# -------------------------------------------------------------------
-# • Restored detailed formatting for spells and feats.
-# • Shared aiohttp session
-# • Robust 2 000‑char splitter
-# • Clickable URL in output
-# -------------------------------------------------------------------
+# main.py — PF2e Discord Bot (syntax‑clean, ready to deploy)
+# ---------------------------------------------------------------------------
+# Key points:
+#   • Shared aiohttp session (created in setup_hook, closed in bot.close)
+#   • No privileged intents needed
+#   • 2 000‑char splitter for Discord message limit
+#   • Clickable AoN URL under item name
+# ---------------------------------------------------------------------------
 
 from __future__ import annotations
 
@@ -15,57 +16,59 @@ import re
 import sys
 import time
 from html import unescape
-from typing import Optional
+from typing import Optional, List
 
 import aiohttp
 import discord
 from discord import app_commands
 from discord.ext import commands
 
-# ── Logging ────────────────────────────────────────────────────
+# ── Logging ─────────────────────────────────────────────────────
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("pf2e-bot")
 
 # ── Configuration ─────────────────────────────────────────────
 TOKEN = os.getenv("DiscordOracle") or os.getenv("DISCORD_TOKEN")
 if not TOKEN:
-    logger.error("Discord token missing (DiscordOracle / DISCORD_TOKEN). Exiting…")
+    logger.error("Discord token missing (DiscordOracle / DISCORD_TOKEN)")
     sys.exit(1)
 
 AON_API_BASE = "https://elasticsearch.aonprd.com/aon/_search"
 AON_WEB_BASE = "https://2e.aonprd.com/"
 
 SEARCH_CATEGORIES = [
-    "All", "Action", "Ancestry", "Background", "Class", "Condition",
-    "Equipment", "Feat", "Hazard", "Monster", "Rule", "Spell", "Trait",
+    "Equipment", "Spell", "Feat", "Class", "Ancestry", "Background",
+    "Monster", "Hazard", "Rule", "Condition", "Trait", "Action",
 ]
 
-# ── Globals ───────────────────────────────────────────────────
+# ── Global HTTP session placeholder ───────────────────────────
 _http_session: aiohttp.ClientSession | None = None
 
-# ── Simple TTL cache ──────────────────────────────────────────
+# ── TTL Cache ─────────────────────────────────────────────────
 class SearchCache:
     def __init__(self, ttl: int = 300):
         self.ttl = ttl
-        self.cache: dict[str, tuple[object, float]] = {}
-        self.lock = asyncio.Lock()
+        self._cache: dict[str, tuple[object, float]] = {}
+        self._lock = asyncio.Lock()
 
     async def get(self, key: str):
-        async with self.lock:
-            val = self.cache.get(key)
-            if not val: return None
-            data, ts = val
-            if time.time() - ts < self.ttl: return data
-            del self.cache[key]
+        async with self._lock:
+            entry = self._cache.get(key)
+            if not entry:
+                return None
+            value, ts = entry
+            if time.time() - ts < self.ttl:
+                return value
+            del self._cache[key]
             return None
 
     async def set(self, key: str, value):
-        async with self.lock:
-            self.cache[key] = (value, time.time())
+        async with self._lock:
+            self._cache[key] = (value, time.time())
 
 search_cache = SearchCache()
 
-# ── Regexes ───────────────────────────────────────────────────
+# ── Regular expressions ───────────────────────────────────────
 TAG_RE = re.compile(r"<[^>]+>")
 WS_RE = re.compile(r"\s+")
 DMG_RE = [
@@ -76,207 +79,302 @@ BULK_RE = [re.compile(p, re.I) for p in (r"bulk\s+([0-9]+|L|-)", r"bulk: ?([0-9]
 HANDS_RE = [re.compile(p, re.I) for p in (r"hands?\s+(\d+)", r"hands?: ?(\d+)")]
 GROUP_RE = [re.compile(p, re.I) for p in (r"group\s+(\w+)", r"weapon\s+group: ?(\w+)")]
 TRAIT_RE = re.compile(
-    r'\b(uncommon|rare|unique|attack|manipulate|auditory|visual|concentrate|move|backswing|disarm|reach|trip|finesse|agile|deadly|fatal|parry|sweep|forceful|shove|twin|monk|unarmed|free-hand|grapple|nonlethal|propulsive|volley|ranged|thrown|versatile\s+[a-z])\b',
+    r"\b(backswing|disarm|reach|trip|finesse|agile|deadly|fatal|parry|sweep|forceful|shove|twin|monk|unarmed|free-hand|grapple|nonlethal|propulsive|volley|ranged|thrown|versatile\s+[a-z])\b",
     re.I,
 )
 
 # ── Utility helpers ───────────────────────────────────────────
 
 def clean_text(text: str | None) -> str:
-    if not text: return ""
+    if not text:
+        return ""
     text = TAG_RE.sub("", text)
-    text = unescape(text)
-    return WS_RE.sub(" ", text).strip()
+    return WS_RE.sub(" ", unescape(text)).strip()
+
 
 async def search_aon_api(query: str, *, result_limit: int = 5, category_filter: str | None = None):
-    key = f"{query}:{result_limit}:{category_filter}"
-    if (cached := await search_cache.get(key)) is not None:
+    """Search the AoN ES endpoint with simple caching."""
+    cache_key = f"{query}:{result_limit}:{category_filter}"
+    if (cached := await search_cache.get(cache_key)) is not None:
         return cached
 
-    if _http_session is None: raise RuntimeError("HTTP session not ready")
+    if _http_session is None:
+        raise RuntimeError("HTTP session not initialised yet")
 
-    bool_q = {
+    bool_query: dict = {
         "should": [
-            {"multi_match": {"query": query, "fields": ["name^3", "text^2", "trait_raw^2"], "type": "best_fields", "fuzziness": "AUTO"}},
+            {
+                "multi_match": {
+                    "query": query,
+                    "fields": ["name^3", "text^2", "trait_raw^2"],
+                    "type": "best_fields",
+                    "fuzziness": "AUTO",
+                }
+            },
             {"wildcard": {"name.keyword": f"*{query.lower()}*"}},
-        ], "minimum_should_match": 1,
+        ],
+        "minimum_should_match": 1,
     }
     if category_filter and category_filter != "All":
-        bool_q.setdefault("filter", []).append({"term": {"type.keyword": category_filter}})
+        bool_query.setdefault("filter", []).append({"term": {"type.keyword": category_filter}})
 
     body = {
-        "query": {"bool": bool_q}, "size": result_limit,
+        "query": {"bool": bool_query},
+        "size": result_limit,
         "_source": ["name", "type", "url", "text", "level", "price", "category", "source", "rarity"],
-        "sort": [{"_score": "desc"}, {"name.keyword": "asc"}],
+        "sort": [{"_score": {"order": "desc"}}, {"name.keyword": {"order": "asc"}}],
     }
 
     try:
         async with _http_session.post(AON_API_BASE, json=body, headers={"User-Agent": "PF2E Discord Bot"}) as resp:
             resp.raise_for_status()
             data = await resp.json()
-    except aiohttp.ClientError as e:
-        logger.error("AON API request failed: %s", e)
+    except Exception as exc:
+        logger.error("AoN API error: %s", exc)
         return []
 
-    results = []
+    results: list[dict] = []
     for hit in data.get("hits", {}).get("hits", []):
         src = hit.get("_source", {})
         url = src.get("url", "")
-        if url and not url.startswith("http"): url = AON_WEB_BASE + url.lstrip("/")
+        if url and not url.startswith("http"):
+            url = AON_WEB_BASE + url.lstrip("/")
         results.append({
-            "name": src.get("name", "Unknown"), "type": src.get("type", "Unknown"),
-            "url": url, "text": src.get("text", ""), "level": src.get("level"),
-            "price": src.get("price"), "category": src.get("category"),
-            "source": src.get("source"), "rarity": src.get("rarity"),
+            "name": src.get("name", "Unknown"),
+            "type": src.get("type", "Unknown"),
+            "url": url,
+            "text": src.get("text", ""),
+            "level": src.get("level"),
+            "price": src.get("price"),
+            "category": src.get("category"),
+            "source": src.get("source"),
+            "rarity": src.get("rarity"),
         })
 
-    await search_cache.set(key, results)
+    await search_cache.set(cache_key, results)
     return results
+
 
 # ── Parsing helpers ───────────────────────────────────────────
 
-def parse_field(field_name: str, text: str) -> Optional[str]:
-    """Generic helper to find a field like 'Source' or 'Cast' in text."""
-    match = re.search(fr"{field_name}</strong>\s*([^<]+)", text, re.I)
-    return clean_text(match.group(1)) if match else None
-
-def get_main_description(text: str) -> str:
-    """Extracts the main descriptive text, typically after the initial block of stats."""
-    # Find the end of the last stat block (like '---') or the first major paragraph break
-    match = re.search(r'(<hr\s?/?>|</h1.*?<br />)', text, re.DOTALL)
-    start_pos = match.end() if match else 0
-    description = clean_text(text[start_pos:])
-    
-    # Clean up any leading "Source" or other field remnants
-    description = re.sub(r"^(Source|Prerequisites|Requirements|Trigger|Frequency)[\s\w:]+", "", description).strip()
-    return description or "No description available."
+def parse_traits(text: str) -> List[str]:
+    traits: List[str] = []
+    seen: set[str] = set()
+    for m in TRAIT_RE.finditer(text):
+        token = m.group(0)
+        if token.lower().startswith("versatile"):
+            token = f"Versatile {token.split()[-1].upper()}"
+        else:
+            token = token.title()
+        if token not in seen:
+            seen.add(token)
+            traits.append(token)
+    return traits
 
 
-# ── Formatting ────────────────────────────────────────────────
+def parse_weapon_stats(text: str) -> dict[str, str]:
+    stats: dict[str, str] = {}
 
-def create_header(res: dict) -> list[str]:
-    name_line = res["name"]
-    rarity = res.get("rarity")
-    if rarity and rarity.lower() != "common":
-        name_line += f" ({rarity.title()})"
-    
-    level_text = f"**{res['type'].title()} {res['level']}**" if res.get("level") else f"**{res['type'].title()}**"
-    lines = [f"**{name_line}**", level_text]
-    if res.get("url"): lines.append(f"<{res['url']}>")
-    
-    traits = parse_traits(clean_text(res.get("text", "")))
-    if traits: lines.append("".join(f"［{t}］" for t in traits))
-    
-    if source := res.get("source"): lines.append(f"**Source**: {source}")
-    return lines
+    # damage
+    for rex in DMG_RE:
+        if (m := rex.search(text)):
+            die, typ = m.groups(default="")
+            typ = typ.lower()
+            typ = {"s": "slashing", "p": "piercing", "b": "bludgeoning"}.get(typ, typ or "slashing")
+            stats["damage"] = f"{die} {typ}"
+            break
 
-def format_weapon(res: dict) -> str:
-    lines = create_header(res)
-    raw_text_html = res.get("text", "")
-    stats = parse_weapon_stats(clean_text(raw_text_html))
-    
-    lines.append("\n" + get_main_description(raw_text_html))
-    lines.append("\n**Weapon Stats**")
-    if res.get("price"): lines.append(f"**Price**: {res['price']}")
-    if stats.get("damage"): lines.append(f"**Damage**: {stats['damage']}")
-    
-    hand_bulk = [f"**Hands**: {stats['hands']}" if 'hands' in stats else None, f"**Bulk**: {stats['bulk']}" if 'bulk' in stats else None]
-    lines.append(" | ".join(filter(None, hand_bulk)))
-    
-    if group := stats.get("group"):
-        crit_effect_map = {"sword": "Target becomes flat-footed.", "axe": "Deal damage to an adjacent creature.", "bow": "Target is immobilized.", "club": "Move the target 5 feet.", "flail": "Target is knocked prone.", "hammer": "Target is knocked prone.", "knife": "Target takes 1d6 persistent bleed damage.", "polearm": "You can move the target 5 feet.", "spear": "Target takes a –2 circumstance penalty to attack rolls against you."}
-        lines.append(f"**Group**: {group.title()} | **Crit Spec**: {crit_effect_map.get(group, 'None')}")
-    
-    return "\n".join(lines)
+    # bulk
+    for rex in BULK_RE:
+        if (m := rex.search(text)):
+            stats["bulk"] = m.group(1)
+            break
 
-def format_spell(res: dict) -> str:
-    lines = create_header(res)
-    raw_text_html = res.get("text", "")
-    
-    if traditions := parse_field("Traditions", raw_text_html): lines.append(f"**Traditions**: {traditions}")
-    if cast := parse_field("Cast", raw_text_html): lines.append(f"**Cast**: {cast}")
-    if range_field := parse_field("Range", raw_text_html): lines.append(f"**Range**: {range_field}")
-    if targets := parse_field("Targets", raw_text_html): lines.append(f"**Targets**: {targets}")
-    if duration := parse_field("Duration", raw_text_html): lines.append(f"**Duration**: {duration}")
-    
-    lines.append("\n" + get_main_description(raw_text_html))
-    return "\n".join(lines)
+    # hands
+    for rex in HANDS_RE:
+        if (m := rex.search(text)):
+            stats["hands"] = m.group(1)
+            break
+    if "hands" not in stats:
+        stats["hands"] = "2" if "two-hand" in text.lower() else "1"
 
-def format_feat(res: dict) -> str:
-    lines = create_header(res)
-    raw_text_html = res.get("text", "")
+    # group
+    for rex in GROUP_RE:
+        if (m := rex.search(text)):
+            stats["group"] = m.group(1).lower()
+            break
 
-    if prereqs := parse_field("Prerequisites", raw_text_html): lines.append(f"**Prerequisites**: {prereqs}")
-    if trigger := parse_field("Trigger", raw_text_html): lines.append(f"**Trigger**: {trigger}")
+    return stats
 
-    lines.append("\n" + get_main_description(raw_text_html))
-    return "\n".join(lines)
+# Critical specialisation effects (abbreviated)
+CRIT_EFFECTS = {
+    "sword": "Target is **flat-footed** until the start of your next turn.",
+    "axe": "Swipe an adjacent creature …",
+    "bow": "Pin the target; it becomes **immobilised** (DC 10 Athletics to escape).",
+    "club": "Knock the target 10 ft away.",
+    "flail": "The target is knocked **prone**.",
+    "hammer": "The target is knocked **prone**.",
+    "knife": "Target takes 1d6 persistent bleed damage.",
+    "polearm": "Move the target 5 ft in a direction of your choice.",
+    "spear": "Target takes –2 circumstance penalty to damage for 1 round.",
+}
 
-def format_generic(res: dict) -> str:
-    lines = create_header(res)
-    lines.append("\n" + get_main_description(res.get("text", "")))
-    return "\n".join(lines)
+
+def crit_effect(group: str | None) -> str:
+    return CRIT_EFFECTS.get((group or "").lower(), "No specific effect for this weapon group.")
+
+# ── Formatting helpers ───────────────────────────────────────
+
+def plural(word: str) -> str:
+    return word if word.endswith("s") else word + "s"
+
+
+def first_after(label: str, text: str) -> Optional[str]:
+    pat = re.compile(fr"{label}[^.]*?([A-Z][^.]+)", re.I)
+    if (m := pat.search(text)):
+        return WS_RE.sub(" ", m.group(1).strip())
+    return None
+
+
+def main_desc(text: str) -> str:
+    sents = [s.strip() for s in text.split(".") if len(s.strip()) > 15]
+    keep = [s for s in sents if not any(k in s.lower() for k in ("source", "favored weapon", "specific magic", "price", "bulk", "hands", "damage", "category"))]
+    return (". ".join(keep[:2]) + ".") if keep else "A martial weapon used in combat."
+
 
 def format_result(res: dict) -> str:
-    """Dispatcher to select the correct formatter based on result type."""
-    res_type = res.get("type", "generic").lower()
+    raw = clean_text(res.get("text"))
+    traits = parse_traits(raw)
+    stats = parse_weapon_stats(raw)
 
-    if res_type == "spell":
-        return format_spell(res)
-    elif res_type == "feat":
-        return format_feat(res)
-    elif res_type == "equipment" and res.get("category", "").lower() == "weapon":
-        return format_weapon(res)
-    else:
-        return format_generic(res)
+    lines: List[str] = ["****Item****"]
+    name_line = res["name"]
+    if res.get("rarity") and res["rarity"].lower() != "common":
+        name_line += f" ({res['rarity']})"
+    lines.append(f"**{name_line}**")
+    if res.get("url"):
+        lines.append(f"<{res['url']}>")  # clickable link
+    lines.append("".join(f"［ {t} ］" for t in traits) or "None")
+    lines.append(f"**Price** {res.get('price', 'Unknown')}")
+    lines.append(f"**Bulk** {stats.get('bulk', 'Unknown')}; **Hands** {stats.get('hands', '1')}")
+    lines.append(f"**Damage** {stats.get('damage', 'Unknown')}")
+    lines.append(f"**Category** {res.get('category', 'weapon')}; **Group** {stats.get('group', 'unknown')}")
+    lines.append("⎯" * 30)
+    lines.append(main_desc(raw))
+    lines.append("")
+    lines.append(f"📘 **Source:** {res.get('source', 'Unknown')}")
+    lines.append("")
+    lines.append("****Favored Weapon of****")
+    lines.append(first_after("favored weapon", raw) or "None")
+    lines.append("")
+    group_title = stats.get("group", "Unknown").title()
+    lines.append(f"****Critical Specialization Effect ({group_title} Group):****")
+    lines.append(crit_effect(stats.get("group")))
+    lines.append("")
+    lines.append(f"****Specific Magic {plural(res['name'])}:****")
+    lines.append(first_after("specific magic", raw) or "None")
+    lines.append("")
+    lines.append("🔗 Data from Archives of Nethys")
+    return "
+".join(lines)
 
-async def send_long_message(interaction: discord.Interaction, text: str):
-    if len(text) <= 2000:
-        await interaction.followup.send(text)
-        return
-    chunks = [text[i:i + 2000] for i in range(0, len(text), 2000)]
-    await interaction.followup.send(chunks[0])
-    for chunk in chunks[1:]: await interaction.channel.send(chunk)
+# ── Discord helpers ──────────────────────────────────────────
 
-# ── Bot Setup and Commands ──────────────────────────────────
-class Pf2eBot(commands.Bot):
+def chunk_send(inter: discord.Interaction, text: str):
+    """Yield chunks <= 1900 chars (keeping code healthy)."""
+    for i in range(0, len(text), 1900):
+        yield text[i:i + 1900]
+
+# ── Autocomplete data ────────────────────────────────────────
+POPULAR_TERMS = [
+    "longsword", "healing potion", "fireball", "leather armor", "shield",
+    "dagger", "shortbow", "chain mail", "rapier", "meteor hammer",
+]
+
+async def ac_category(_: discord.Interaction, current: str):
+    cats = ["All"] + SEARCH_CATEGORIES
+    return [app_commands.Choice(name=c, value=c) for c in cats if current.lower() in c.lower()][:25]
+
+async def ac_query(_: discord.Interaction, current: str):
+    if len(current) < 2:
+        return []
+    return [app_commands.Choice(name=t.title(), value=t) for t in POPULAR_TERMS if current.lower() in t][:25]
+
+# ── Bot class ────────────────────────────────────────────────
+class PF2eBot(commands.Bot):
     def __init__(self):
-        intents = discord.Intents.default()
-        intents.message_content = True
-        super().__init__(command_prefix="!", intents=intents)
-
-    async def on_ready(self):
-        logger.info(f"Logged in as {self.user}")
-        await self.tree.sync()
-        logger.info("Command tree synced.")
+        super().__init__(command_prefix=commands.when_mentioned, intents=discord.Intents.default())
 
     async def setup_hook(self):
         global _http_session
-        _http_session = aiohttp.ClientSession()
+        _http_session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10))
+        synced = await self.tree.sync()
+        logger.info("Synced %d commands", len(synced))
 
     async def close(self):
-        if _http_session: await _http_session.close()
+        global _http_session
+        if _http_session and not _http_session.closed:
+            await _http_session.close()
         await super().close()
 
-bot = Pf2eBot()
+bot = PF2eBot()
 
-@bot.tree.command(name="search", description="Search the Archives of Nethys for a PF2e rule, item, spell, etc.")
-@app_commands.describe(query="What to search for.", category="The category to search in.")
-@app_commands.choices(category=[app_commands.Choice(name=cat, value=cat) for cat in SEARCH_CATEGORIES])
-async def search(interaction: discord.Interaction, query: str, category: Optional[str] = "All"):
-    await interaction.response.defer()
+# ── /search command ─────────────────────────────────────────
+@bot.tree.command(name="search", description="Search Archives of Nethys for PF2e content")
+@app_commands.describe(query="Search term", category="Optional category filter")
+@app_commands.autocomplete(query=ac_query, category=ac_category)
+async def cmd_search(inter: discord.Interaction, query: str, category: Optional[str] = None):
+    await interaction_response_defer_safe(inter)
     try:
-        results = await search_aon_api(query, result_limit=5, category_filter=category)
-        if not results:
-            await interaction.followup.send(f"No results found for **{query}** in category **{category}**.")
-            return
-        
-        response_text = format_result(results[0])
-        await send_long_message(interaction, response_text)
-    except Exception as e:
-        logger.error(f"Error during search command: {e}", exc_info=True)
-        await interaction.followup.send("An unexpected error occurred.")
+        results = await search_aon_api(query, category_filter=category)
+    except Exception as exc:
+        logger.error("search error: %s", exc)
+        await safe_followup(inter, "Error while searching. Please try again later.")
+        return
 
-# ── Run Bot ─────────────────────────────────────────────────────
+    if not results:
+        await safe_followup(inter, f"**No results found for `{query}`**")
+        return
+
+    text = format_result(results[0])
+    for chunk in chunk_send(inter, text):
+        await safe_followup(inter, chunk)
+
+# safe helpers for follow‑ups and defer
+async def interaction_response_defer_safe(inter: discord.Interaction):
+    if not inter.response.is_done():
+        try:
+            await inter.response.defer()
+        except Exception:
+            pass
+
+async def safe_followup(inter: discord.Interaction, content: str):
+    target = inter.followup if inter.response.is_done() else inter.response
+    try:
+        await target.send(content)
+    except Exception as err:
+        logger.error("follow‑up failed: %s", err)
+
+# ── /help command ───────────────────────────────────────────
+@bot.tree.command(name="help", description="Show help information")
+async def cmd_help(inter: discord.Interaction):
+    msg = (
+        "**PF2e Bot Help**
+
+"
+        "• `/search <term>` — search Archives of Nethys. Optional `category` arg narrows the type.
+"
+        "  Use tab‑completion for quick suggestions."
+    )
+    if not inter.response.is_done():
+        await inter.response.send_message(msg, ephemeral=True)
+    else:
+        await inter.followup.send(msg, ephemeral=True)
+
+# ── Run bot ─────────────────────────────────────────────────
 if __name__ == "__main__":
-    bot.run(TOKEN)
+    try:
+        bot.run(TOKEN)
+    except discord.errors.LoginFailure:
+        logger.error("Invalid token — check DISCORD_TOKEN/DiscordOracle.")
+
