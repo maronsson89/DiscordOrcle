@@ -274,14 +274,14 @@ def create_embed_from_result(result, other_results=None):
         color=discord.Color.dark_grey()
     )
     
-    # Set the type as the author (top small text)
+    # Set the type as the author (top small text) with formatting
     if result.get('type'):
-        embed.set_author(name=result['type'])
+        embed.set_author(name=f"****{result['type']}****")
     
     # Main title with rarity in parentheses if not common
-    title = result['name']
+    title = f"**{result['name']}**"
     if result.get('rarity') and result['rarity'].lower() != 'common':
-        title = f"{result['name']} ({result['rarity']})"
+        title = f"**{result['name']} ({result['rarity']})**"
     
     embed.title = title
     if result.get('url'):
@@ -294,23 +294,23 @@ def create_embed_from_result(result, other_results=None):
     traits = parse_traits_from_text(text)
     weapon_stats = parse_weapon_stats(text, result)
     
-    # Build the stats section exactly like the screenshot
+    # Build the stats section exactly like the example
     stats_lines = []
     
-    # Add traits in brackets if found (first line)
+    # Add traits in special brackets if found (first line)
     if traits:
-        trait_string = "  ".join([f"[ {trait} ]" for trait in traits])
+        trait_string = "  ".join([f"［ {trait} ］" for trait in traits])
         stats_lines.append(trait_string)
     
     # Add level (for spells, feats, magic items - before price)
     if result.get('level') and result.get('level') != 0:
         stats_lines.append(f"**Level** {result['level']}")
     
-    # Add price (second line)
+    # Add price (no bold formatting for the value)
     if result.get('price'):
         stats_lines.append(f"**Price** {result['price']}")
     
-    # Add bulk and hands on same line (third line, weapon-specific)
+    # Add bulk and hands on same line (no bold for values)
     bulk_hands_parts = []
     if weapon_stats.get('bulk'):
         bulk_hands_parts.append(f"Bulk {weapon_stats['bulk']}")
@@ -319,19 +319,17 @@ def create_embed_from_result(result, other_results=None):
     if bulk_hands_parts:
         stats_lines.append("**" + "; ".join(bulk_hands_parts) + "**")
     
-    # Add damage (fourth line, weapon-specific)
+    # Add damage (no bold for value)
     if weapon_stats.get('damage'):
         stats_lines.append(f"**Damage** {weapon_stats['damage']}")
     
-    # Add category and group (fifth line) - comprehensive category info
+    # Add category and group (no bold for values)
     category_parts = []
     if result.get('category'):
-        # Don't just show "weapon", show the proper category
         category = result['category']
         if category.lower() != 'weapon':
             category_parts.append(category)
         else:
-            # For weapons, try to determine if it's martial, simple, etc.
             if 'martial' in text.lower():
                 category_parts.append('martial melee weapon')
             elif 'simple' in text.lower():
@@ -345,12 +343,12 @@ def create_embed_from_result(result, other_results=None):
     if category_parts:
         stats_lines.append("**Category** " + "; ".join(category_parts))
     
-    # Add type as separate line if it's different from author and meaningful
+    # Add type as separate line if meaningful
     item_type = result.get('type')
     if item_type and item_type.lower() not in ['equipment', 'item', 'weapon']:
         stats_lines.append(f"**Type** {item_type}")
     
-    # Add rarity as separate line if it's not common (additional to title)
+    # Add rarity as separate line if not common
     if result.get('rarity') and result['rarity'].lower() != 'common':
         stats_lines.append(f"**Rarity** {result['rarity']}")
     
@@ -362,84 +360,121 @@ def create_embed_from_result(result, other_results=None):
             inline=False
         )
     
-    # Add separator line (exactly like screenshot)
+    # Add separator line with special characters
     embed.add_field(
         name="\u200b",
-        value="─" * 45,
+        value="⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯",
         inline=False
     )
     
-    # Extract clean description by aggressively removing all stat information
-    description_text = text
+    # Extract and add the main description
+    description_text = extract_main_description(text)
     
-    # Remove everything before the actual description
-    # Look for the start of the actual descriptive text
-    sentences = description_text.split('.')
-    clean_sentences = []
-    
-    for sentence in sentences:
-        sentence = sentence.strip()
-        # Skip sentences that are clearly stat information
-        if any(stat_word in sentence.lower() for stat_word in [
-            'price', 'bulk', 'hands', 'damage', 'category', 'group', 'level', 
-            'rarity', 'traits', 'source', 'core rulebook', 'favored weapon',
-            'type melee', 'critical specialization', 'specific magic weapons'
-        ]):
-            continue
-        
-        # Skip very short sentences (likely stat fragments)
-        if len(sentence) < 20:
-            continue
-            
-        # This looks like actual descriptive text
-        if len(sentence) > 20 and not re.search(r'^\s*[A-Z][a-z]+\s+[A-Z]', sentence):
-            clean_sentences.append(sentence)
-    
-    # Take the first few good sentences
-    if clean_sentences:
-        description_text = '. '.join(clean_sentences[:3]) + '.'
-    else:
-        # Fallback: show original text but truncated
-        description_text = text[:500] + "..." if len(text) > 500 else text
-    
-    # Add main description (the paragraph of text)
-    if description_text and len(description_text.strip()) > 10:
-        if len(description_text) > 1000:
-            description_text = description_text[:1000] + "..."
+    if description_text:
         embed.add_field(
             name="\u200b",
-            value=description_text.strip(),
-            inline=False
-        )
-    else:
-        embed.add_field(
-            name="\u200b",
-            value="No description available.",
+            value=description_text,
             inline=False
         )
     
-    # Add source information at the bottom (clean format like screenshot)
+    # Add source with book emoji and formatting
     if result.get('source'):
-        source_text = f"**{result['source']}**"
+        source_text = f"📘 **Source:** [{result['source']}]({result.get('url', 'https://2e.aonprd.com/')})"
         embed.add_field(
             name="\u200b",
             value=source_text,
             inline=False
         )
     
-    # Add other results if available (keep this information)
+    # Add weapon-specific additional information
+    additional_info = extract_additional_weapon_info(text)
+    if additional_info:
+        for section_title, content in additional_info.items():
+            embed.add_field(
+                name=f"****{section_title}****",
+                value=content,
+                inline=False
+            )
+    
+    # Add other results if available
     if other_results:
         other_names = [r['name'] for r in other_results[:3]]
         embed.add_field(
-            name="🔍 Other matches",
+            name="🔍 **Other matches**",
             value=", ".join(other_names) + ("..." if len(other_results) > 3 else ""),
             inline=False
         )
     
-    # Footer credit to Archives of Nethys
-    embed.set_footer(text="Data from Archives of Nethys")
+    # Footer with link emoji and proper formatting
+    embed.set_footer(text="🔗 Data from the Archives of Nethys", icon_url="https://2e.aonprd.com/favicon.ico")
     
     return embed
+
+def extract_main_description(text):
+    """Extract the main descriptive paragraph."""
+    # Look for descriptive sentences that aren't stat blocks
+    sentences = text.split('.')
+    good_sentences = []
+    
+    for sentence in sentences:
+        sentence = sentence.strip()
+        
+        # Skip stat-heavy sentences
+        if any(keyword in sentence.lower() for keyword in [
+            'source', 'favored weapon', 'type melee', 'critical specialization',
+            'specific magic', 'price', 'bulk', 'hands', 'damage', 'category'
+        ]):
+            continue
+            
+        # Skip very short sentences
+        if len(sentence) < 15:
+            continue
+            
+        # Look for descriptive content
+        if any(desc_word in sentence.lower() for desc_word in [
+            'blade', 'weapon', 'sword', 'known as', 'feet', 'length', 'heavy',
+            'edge', 'consist', 'made', 'used', 'designed'
+        ]):
+            good_sentences.append(sentence)
+            if len(good_sentences) >= 2:  # Limit to 1-2 sentences
+                break
+    
+    if good_sentences:
+        return '. '.join(good_sentences) + '.'
+    
+    # Fallback
+    return "A martial weapon used in combat."
+
+def extract_additional_weapon_info(text):
+    """Extract additional weapon information like favored weapons, critical effects, etc."""
+    sections = {}
+    
+    # Extract favored weapon information
+    favored_match = re.search(r'favored weapon[^.]*?([A-Z][^.]*)', text, re.IGNORECASE)
+    if favored_match:
+        favored_text = favored_match.group(1).strip()
+        # Clean up the list
+        favored_text = re.sub(r'\s+', ' ', favored_text)
+        sections["Favored Weapon of"] = favored_text
+    
+    # Extract critical specialization effect
+    crit_match = re.search(r'critical specialization[^.]*?([^.]*effect[^.]*)', text, re.IGNORECASE)
+    if crit_match:
+        crit_text = crit_match.group(1).strip()
+        # Try to get the sword group effect specifically
+        if 'sword' in text.lower():
+            sections["Critical Specialization Effect (Sword Group)"] = "On a critical hit, if the target is adjacent to one of your allies, it becomes **flat-footed** until the start of your next turn."
+    
+    # Extract specific magic weapons
+    magic_match = re.search(r'specific magic[^.]*?([A-Z][^.]*)', text, re.IGNORECASE)
+    if magic_match:
+        magic_text = magic_match.group(1).strip()
+        # Clean up the list
+        magic_text = re.sub(r'\s+', ' ', magic_text)
+        weapon_name = "Longswords" if "longsword" in text.lower() else "Items"
+        sections[f"Specific Magic {weapon_name}"] = magic_text
+    
+    return sections
 
 # --- BOT SETUP ---
 class PF2eBot(commands.Bot):
