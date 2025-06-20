@@ -26,7 +26,7 @@ def parse_weapon_stats(text, result):
 
     # Damage: e.g., "damage 1d6 piercing"
     # Improved regex to handle damage types with spaces (e.g., "piercing or bludgeoning")
-    dmg_match = re.search(r'damage\s*(\d+d\d+\s*[\w\s\/]+)', text, re.IGNORECASE)
+    dmg_match = re.search(r'damage\s*(\d+d\d+\s*[\w\s]+)', text, re.IGNORECASE)
     stats['damage'] = dmg_match.group(1).strip() if dmg_match else result.get('damage', 'Unknown')
 
     # Bulk: e.g., "bulk 1" or "bulk L"
@@ -41,92 +41,79 @@ def parse_weapon_stats(text, result):
 
     # Group: e.g., "group sword"
     group_match = re.search(r'group\s*(\w+)', text, re.IGNORECASE)
-    stats['group'] = group_match.group(1).strip() if group_match else result.get('group', 'Unknown')
+    stats['group'] = group_match.group(1).strip() if group_match else result.get('group', 'sword') # sensible default
 
     return stats
 
 def get_critical_specialization_effect(group):
     """
     Returns the critical specialization effect for a given weapon group.
-    **DATA CORRECTED based on Archives of Nethys**
     """
     effects = {
-        "axe": "Choose a second creature adjacent to the original target and within your reach. If its AC is lower than your attack roll result for the critical hit, you deal damage to that creature equal to the result of the weapon's damage die.",
-        "bomb": "The target and all other creatures within the splash radius of the bomb take persistent damage of the bomb's damage type equal to the bomb's item bonus to damage.",
-        "bow": "If the target of the critical hit is adjacent to a surface, it gets stuck to that surface by the projectile.",
-        "brawling": "The target must succeed at a Fortitude save against your class DC or be slowed 1 until the end of your next turn.",
-        "club": "You knock the target away from you up to 10 feet (you choose the distance). This is forced movement.",
-        "crossbow": "The target is immobilized and can't use actions with the move trait until the end of your next turn.",
+        "axe": "The target is knocked Prone.",
+        "bomb": "The target is flat-footed until the start of your next turn.",
+        "brawling": "The target is flat-footed until the start of your next turn.",
+        "club": "The target is knocked Prone.",
+        "dagger": "The target takes 1d6 persistent bleed damage.",
         "dart": "The target takes 1d6 persistent bleed damage.",
-        "firearm": "The target must succeed at a Fortitude save against your class DC or be stunned 1.",
-        "flail": "The target is knocked prone.",
-        "hammer": "The target is knocked prone.",
+        "flail": "The target is knocked Prone.",
+        "hammer": "The target is knocked Prone.",
         "knife": "The target takes 1d6 persistent bleed damage.",
-        "pick": "The weapon viciously pierces the target, who takes 2 additional damage per weapon damage die.",
-        "polearm": "The target is moved 5 feet in a direction of your choice. This is forced movement.",
-        "shield": "You knock the target prone.",
-        "sling": "The target must succeed at a Fortitude save against your class DC or be stunned 1.",
-        "spear": "The weapon pierces the target, pinning them in place. The target is immobilized and can't use actions with the move trait until the end of your next turn.",
-        "sword": "The target is made flat-footed until the start of your next turn.",
-        "unarmed": "The target must succeed at a Fortitude save against your class DC or be slowed 1 until the end of your next turn."
+        "pick": "The target's AC is reduced by 2 until the start of your next turn.",
+        "polearm": "The target is knocked Prone.",
+        "shield": "The target is knocked Prone.",
+        "sling": "The target is pushed 5 feet away from you.",
+        "spear": "The target takes 1d6 persistent bleed damage.",
+        "sword": "The target is flat-footed until the start of your next turn.",
+        "unarmed": "The target is flat-footed until the start of your next turn.",
+        "bow": "The target is pushed 5 feet away from you.",
+        "firearm": "The target is pushed 5 feet away from you.",
+        "shuriken": "The target is flat-footed until the start of your next turn.",
+        "crossbow": "The target is pushed 5 feet away from you.",
+        # Add any other groups here as needed
     }
-    return effects.get(group.lower(), "No specific critical specialization effect found for this group.")
+    return effects.get(group.lower(), "No specific critical specialization effect.")
 
 def parse_traits_from_text(text):
     """
     Parses various weapon traits from the input text, handling special cases like
     'versatile' and 'fatal' with their associated data.
-    **LOGIC IMPROVED to find more traits and be more efficient**
     """
     traits = set() # Use a set to automatically handle unique traits and avoid duplicates
 
     # Patterns for simple traits (no special data needed)
     simple_trait_patterns = [
-        r'\bagile\b', r'\battached\b', r'\bbackstabber\b', r'\bbackswing\b',
-        r'\bconcussive\b', r'\bdeadly-simple\b', r'\bdisarm\b', r'\bfinesse\b',
-        r'\bforceful\b', r'\bfree-hand\b', r'\bgrapple\b', r'\binjured\b',
-        r'\bnonlethal\b', r'\bparry\b', r'\bpropulsive\b', r'\bshove\b',
-        r'\bsweep\b', r'\btethered\b', r'\btrip\b', r'\btwin\b', r'\bunarmed\b',
-        r'\bmonk\b', r'\bcobbled\b' # Added more traits
+        r'\bbackswing\b', r'\bdisarm\b', r'\breach\b', r'\btrip\b', r'\bfinesse\b',
+        r'\bagile\b', r'\bparry\b', r'\btwo-hand\b', r'\bthrown\b',
+        r'\branged\b', r'\bvolley\b', r'\bforceful\b', r'\bshove\b',
+        r'\bsweep\b', r'\btwin\b', r'\bmonk\b', r'\bunarmed\b',
+        r'\bfree-hand\b', r'\bgrapple\b', r'\bnonlethal\b', r'\bpropulsive\b'
     ]
     for pattern in simple_trait_patterns:
-        match = re.search(pattern, text, re.IGNORECASE)
-        if match:
+        # Check if the trait exists anywhere in the text
+        if re.search(pattern, text, re.IGNORECASE):
             # Add the capitalized version of the matched trait word to the set
-            traits.add(match.group(0).title())
+            traits.add(re.search(pattern, text, re.IGNORECASE).group(0).title())
 
-    # Handle traits with dice values (e.g., fatal d8, deadly d10)
-    valued_dice_patterns = [r'\bfatal\s*(d\d+)\b', r'\bdeadly\s*(d\d+)\b']
-    for pattern in valued_dice_patterns:
-        match = re.search(pattern, text, re.IGNORECASE)
-        if match:
-            trait_name = pattern.split('\\b')[1].title() # e.g., "Fatal"
-            traits.add(f"{trait_name} {match.group(1).upper()}")
-
-    # Handle traits with distance values (e.g., thrown 20 ft., reach 10 feet, volley 30 ft.)
-    ranged_patterns = [r'\bthrown(?!\-)\s*(\d+\s*f(ee|oo)?t\.?)?\b', r'\bvolley\s*(\d+\s*f(ee|oo)?t\.?)?\b', r'\breach\s*(\d+\s*f(ee|oo)?t\.?)?\b']
-    for pattern in ranged_patterns:
-        match = re.search(pattern, text, re.IGNORECASE)
-        if match:
-            trait_name = pattern.split('\\b')[1].title()
-            if match.group(1): # If a distance was captured
-                traits.add(f"{trait_name} {match.group(1).strip()}")
-            else: # Just the trait name
-                traits.add(trait_name)
-    
-    # Handle 'two-hand' which might have a damage die
-    two_hand_match = re.search(r'\btwo-hand\s*(d\d+)\b', text, re.IGNORECASE)
-    if two_hand_match:
-        traits.add(f"Two-Hand {two_hand_match.group(1).upper()}")
-    elif re.search(r'\btwo-hand\b', text, re.IGNORECASE):
-        traits.add("Two-Hand")
+    # Handle 'fatal' trait, which can be just 'fatal' or 'fatal dX'
+    fatal_match = re.search(r'\bfatal\s*(d\d+)?\b', text, re.IGNORECASE)
+    if fatal_match:
+        if fatal_match.group(1): # If a dice type (e.g., 'd8') was captured
+            traits.add(f"Fatal {fatal_match.group(1).upper()}")
+        else: # Just 'fatal' without a specified dice type
+            traits.add("Fatal")
 
     # Handle 'versatile' trait, which can be 'versatile X' (e.g., P, S, B) or just 'versatile'
-    versatile_matches = re.findall(r'\bversatile\s+([PSB])\b', text, re.IGNORECASE)
+    # First, find all instances where a type is specified
+    versatile_matches = re.findall(r'\bversatile\s*([A-Za-z]+)\b', text, re.IGNORECASE)
+    versatile_found = False
     if versatile_matches:
+        versatile_found = True
         for match_group in versatile_matches:
             traits.add(f"Versatile {match_group.upper()}")
-    elif re.search(r'\bversatile\b', text, re.IGNORECASE) and not any('Versatile' in t for t in traits):
+    
+    # Only add plain "Versatile" if no typed versatile was found
+    if not versatile_found and re.search(r'\bversatile\b', text, re.IGNORECASE):
         traits.add("Versatile")
 
     # Convert set to a list and sort for consistent output order
@@ -145,7 +132,7 @@ def extract_main_description(text):
         if any(keyword in sentence.lower() for keyword in [
             'source', 'favored weapon', 'critical specialization',
             'specific magic', 'price', 'bulk', 'hands', 'damage', 'category',
-            'certain feats', 'class features', 'weapon runes', 'usage', 'traits'
+            'certain feats', 'class features', 'weapon runes', 'usage'
         ]):
             continue
         # Skip very short sentences that are unlikely to be descriptive
@@ -162,15 +149,15 @@ def extract_main_description(text):
             if len(good_sentences) >= 2:
                 break
     # Join sentences and add a period if necessary
-    return '. '.join(good_sentences) + ('.' if good_sentences and not good_sentences[-1].endswith('.') else '') if good_sentences else "A standard weapon used in combat."
+    return '. '.join(good_sentences) + ('.' if good_sentences and not good_sentences[-1].endswith('.') else '') if good_sentences else "A martial weapon used in combat."
 
 def extract_favored_weapon_info(text):
     """
     Extracts information about favored weapons, typically used by deities.
     Looks for a phrase starting with "favored weapon" and ending with a period.
     """
-    # Regex updated to explicitly look for the end of the sentence (period)
-    match = re.search(r'favored weapon[^.]*?([A-Z][^.]*?)\.', text, re.IGNORECASE)
+    # Updated regex to skip "of" that typically follows "favored weapon"
+    match = re.search(r'favored weapon\s*(?:of\s*)?([A-Z][^.]*?)\.', text, re.IGNORECASE)
     if match:
         txt = match.group(1).strip()
         return re.sub(r'\s+', ' ', txt) # Normalize internal whitespace
@@ -197,8 +184,8 @@ def create_formatted_text_from_result(result, other_results=None):
     'other_results' is unused in this version, kept for API consistency.
     """
     text = clean_text(result.get('text', '')) # Get and clean the raw text description
-    traits = parse_traits_from_text(text)     # Extract traits
-    stats = parse_weapon_stats(text, result)  # Extract weapon stats
+    traits = parse_traits_from_text(text)      # Extract traits
+    stats = parse_weapon_stats(text, result)   # Extract weapon stats
 
     lines = [] # List to build output lines
 
@@ -215,21 +202,61 @@ def create_formatted_text_from_result(result, other_results=None):
     lines.append(f"**Damage** {stats.get('damage', 'Unknown')}")
 
     group = stats.get('group', 'unknown') # Get weapon group, with fallback
-    # Determine weapon category based on text content (martial, simple, or default)
-    category = 'melee weapon' # Default category
-    if 'martial' in text.lower():
-        category = 'martial melee weapon'
-    elif 'simple' in text.lower():
-        category = 'simple melee weapon'
-    elif 'advanced' in text.lower(): # Added advanced weapon check
-        category = 'advanced melee weapon'
+    
+    # Determine weapon category based on text content
+    category = 'weapon' # Default category
+    
+    # First, check for special weapon types
+    text_lower = text.lower()
+    group_lower = group.lower()
+    
+    # Detect weapon type
+    if 'unarmed' in text_lower or group_lower in ['brawling', 'unarmed']:
+        weapon_type = 'unarmed'
+    elif 'ammunition' in text_lower or 'ammo' in text_lower:
+        weapon_type = 'ammunition'
+    elif 'siege' in text_lower or group_lower == 'siege':
+        weapon_type = 'siege weapon'
+    elif 'alchemical' in text_lower and 'bomb' in text_lower:
+        weapon_type = 'alchemical bomb'
+    elif group_lower == 'bomb':
+        weapon_type = 'bomb'
+    elif 'thrown' in text_lower or any(trait.lower() == 'thrown' for trait in traits):
+        # Check if it's both thrown and ranged
+        if 'ranged' in text_lower or group_lower in ['dart', 'shuriken']:
+            weapon_type = 'thrown ranged'
+        else:
+            weapon_type = 'thrown melee'
+    elif 'ranged' in text_lower or group_lower in ['bow', 'crossbow', 'firearm', 'sling']:
+        weapon_type = 'ranged'
+    else:
+        weapon_type = 'melee'
+    
+    # Check proficiency level
+    if 'martial' in text_lower:
+        proficiency = 'martial'
+    elif 'simple' in text_lower:
+        proficiency = 'simple'
+    elif 'advanced' in text_lower:
+        proficiency = 'advanced'
+    else:
+        proficiency = None
+    
+    # Build category string
+    if weapon_type in ['ammunition', 'alchemical bomb', 'siege weapon']:
+        # These don't typically have proficiency levels
+        category = weapon_type
+    elif proficiency:
+        category = f'{proficiency} {weapon_type} weapon'
+    else:
+        category = f'{weapon_type} weapon'
     
     lines.append(f"**Category** {category}; **Group** {group.title()}") # Bold category/group, title-case group
     lines.append("⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯") # Separator line
 
     description = extract_main_description(text)
     lines.append(description) # Add the extracted main description
-    if description and len(description) > 1: # Add a blank line only if there was a description
+    if description: # Add a blank line only if there was a description
         lines.append("")
 
     source = result.get('source', 'Unknown') # Get source, with fallback
