@@ -235,6 +235,48 @@ def format_traits(traits: List[str], base_damage_str: str | None = None) -> str:
             
     return " ".join(formatted_traits)
 
+def main_desc(text: str) -> str:
+    # Descriptions on AoN are typically separated from the stat block by a horizontal rule,
+    # which often becomes '---' in the text blob.
+    parts = text.split('---', 1)
+    
+    desc = "No description available."
+
+    if len(parts) > 1 and parts[1].strip():
+        # We found a description after the separator
+        desc_text = parts[1].strip()
+        
+        # Clean up any remaining boilerplate from this section
+        sents = [s.strip() for s in desc_text.split('.') if len(s.strip()) > 10]
+        bad_keywords = (
+             "critical specialization",
+             "favored weapon"
+        )
+        keep = [s for s in sents if not any(k in s.lower() for k in bad_keywords)]
+        
+        # Join the kept sentences, ensuring it ends with a period.
+        if keep:
+            desc = ". ".join(keep)
+            if not desc.endswith('.'):
+                desc += '.'
+        else:
+            # If all sentences were filtered, use the original text but clean it.
+            desc = desc_text.split("Critical Specialization Effects")[0].strip()
+
+    else:
+        # Fallback for items that might not have the separator
+        sents = [s.strip() for s in text.split(".") if len(s.strip()) > 15]
+        bad_keywords = (
+            "source", "favored weapon", "specific magic", "price", "bulk", "hands",
+            "damage", "category", "group", "type", "level", "critical success",
+            "critical specialization"
+        )
+        keep = [s for s in sents if not any(k in s.lower() for k in bad_keywords)]
+        if keep:
+            desc = (". ".join(keep[:2]) + ".")
+    
+    return (desc[:4093] + '...') if len(desc) > 4096 else desc
+
 # ── Formatting helpers ───────────────────────────────────────
 
 def plural(word: str) -> str:
@@ -247,16 +289,6 @@ def first_after(label: str, text: str) -> Optional[str]:
         return WS_RE.sub(" ", m.group(1).strip())
     return None
 
-
-def main_desc(text: str) -> str:
-    sents = [s.strip() for s in text.split(".") if len(s.strip()) > 15]
-    bad_keywords = (
-        "source", "favored weapon", "specific magic", "price", "bulk", "hands",
-        "damage", "category", "group", "type", "level", "critical success"
-    )
-    keep = [s for s in sents if not any(k in s.lower() for k in bad_keywords)]
-    desc = (". ".join(keep[:2]) + ".") if keep else "No description available."
-    return (desc[:4093] + '...') if len(desc) > 4096 else desc
 
 def get_rarity_color(rarity: str | None) -> discord.Color:
     rarity = (rarity or "common").lower()
