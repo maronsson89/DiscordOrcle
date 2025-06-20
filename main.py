@@ -335,9 +335,15 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
 
 # Run the bot
 if __name__ == "__main__":
+    # Debug: Print all environment variables (remove after testing)
+    print("Environment variables present:", list(os.environ.keys()))
+    
     # Get tokens from environment variables
     discord_token = os.environ.get('DISCORD_BOT_TOKEN')
     openai_key = os.environ.get('OPENAI_API_KEY')
+    
+    print(f"Discord token found: {'Yes' if discord_token else 'No'}")
+    print(f"OpenAI key found: {'Yes' if openai_key else 'No'}")
     
     if not discord_token:
         raise ValueError("DISCORD_BOT_TOKEN environment variable not set")
