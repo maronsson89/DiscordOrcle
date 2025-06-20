@@ -275,8 +275,7 @@ def format_result(res: dict) -> str:
     lines.append(first_after("specific magic", raw) or "None")
     lines.append("")
     lines.append("🔗 Data from Archives of Nethys")
-    return "
-".join(lines)
+    return "\n".join(lines)
 
 # ── Discord helpers ──────────────────────────────────────────
 
@@ -359,11 +358,8 @@ async def safe_followup(inter: discord.Interaction, content: str):
 @bot.tree.command(name="help", description="Show help information")
 async def cmd_help(inter: discord.Interaction):
     msg = (
-        "**PF2e Bot Help**
-
-"
-        "• `/search <term>` — search Archives of Nethys. Optional `category` arg narrows the type.
-"
+        "**PF2e Bot Help**\n\n"
+        "• `/search <term>` — search Archives of Nethys. Optional `category` arg narrows the type.\n"
         "  Use tab‑completion for quick suggestions."
     )
     if not inter.response.is_done():
