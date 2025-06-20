@@ -1,4 +1,4 @@
-# main.py - Simple PF2e Discord Bot with Slash Commands (No Images)
+# main.py - Simple PF2e Discord Bot with Slash Commands (Plain Text Format)
 
 import discord
 from discord.ext import commands
@@ -267,25 +267,8 @@ def parse_weapon_stats(text, result):
     
     return stats
 
-def create_embed_from_result(result, other_results=None):
-    """Create a Discord embed from a search result matching the exact style."""
-    
-    embed = discord.Embed(
-        color=discord.Color.dark_grey()
-    )
-    
-    # Set the type as the author (top small text) with formatting
-    if result.get('type'):
-        embed.set_author(name=f"****{result['type']}****")
-    
-    # Main title with rarity in parentheses if not common
-    title = f"**{result['name']}**"
-    if result.get('rarity') and result['rarity'].lower() != 'common':
-        title = f"**{result['name']} ({result['rarity']})**"
-    
-    embed.title = title
-    if result.get('url'):
-        embed.url = result['url']
+def create_formatted_text_from_result(result, other_results=None):
+    """Create formatted Discord text from a search result matching the exact structure."""
     
     # Get the raw text for parsing
     text = clean_text(result.get('text', ''))
@@ -294,36 +277,39 @@ def create_embed_from_result(result, other_results=None):
     traits = parse_traits_from_text(text)
     weapon_stats = parse_weapon_stats(text, result)
     
-    # Build the stats section exactly like the example
-    stats_lines = []
+    # Start building the formatted text
+    lines = []
     
-    # Add traits in special brackets if found (first line)
+    # Line 1: ****Item****
+    lines.append("****Item****")
+    
+    # Line 2: **[Weapon Name]**
+    weapon_name = result['name']
+    if result.get('rarity') and result['rarity'].lower() != 'common':
+        weapon_name += f" ({result['rarity']})"
+    lines.append(f"**{weapon_name}**")
+    
+    # Line 3: Traits in brackets
     if traits:
-        trait_string = "  ".join([f"［ {trait} ］" for trait in traits])
-        stats_lines.append(trait_string)
+        trait_string = "".join([f"［ {trait} ］" for trait in traits])
+        lines.append(trait_string)
+    else:
+        lines.append("None")
     
-    # Add level (for spells, feats, magic items - before price)
-    if result.get('level') and result.get('level') != 0:
-        stats_lines.append(f"**Level** {result['level']}")
+    # Line 4: Price
+    price = result.get('price', 'Unknown')
+    lines.append(f"**Price** {price}")
     
-    # Add price (no bold formatting for the value)
-    if result.get('price'):
-        stats_lines.append(f"**Price** {result['price']}")
+    # Line 5: Bulk and Hands
+    bulk = weapon_stats.get('bulk', 'Unknown')
+    hands = weapon_stats.get('hands', '1')
+    lines.append(f"**Bulk** {bulk}; **Hands** {hands}")
     
-    # Add bulk and hands on same line (no bold for values)
-    bulk_hands_parts = []
-    if weapon_stats.get('bulk'):
-        bulk_hands_parts.append(f"Bulk {weapon_stats['bulk']}")
-    if weapon_stats.get('hands'):
-        bulk_hands_parts.append(f"Hands {weapon_stats['hands']}")
-    if bulk_hands_parts:
-        stats_lines.append("**" + "; ".join(bulk_hands_parts) + "**")
+    # Line 6: Damage
+    damage = weapon_stats.get('damage', 'Unknown')
+    lines.append(f"**Damage** {damage}")
     
-    # Add damage (no bold for value)
-    if weapon_stats.get('damage'):
-        stats_lines.append(f"**Damage** {weapon_stats['damage']}")
-    
-    # Add category and group (no bold for values)
+    # Line 7: Category and Group
     category_parts = []
     if result.get('category'):
         category = result['category']
@@ -336,79 +322,65 @@ def create_embed_from_result(result, other_results=None):
                 category_parts.append('simple melee weapon')
             else:
                 category_parts.append('melee weapon')
+    else:
+        category_parts.append('melee weapon')
     
-    if weapon_stats.get('group'):
-        category_parts.append(f"Group {weapon_stats['group']}")
+    group = weapon_stats.get('group', 'unknown')
+    lines.append(f"**Category** {'; '.join(category_parts)}; **Group** {group}")
     
-    if category_parts:
-        stats_lines.append("**Category** " + "; ".join(category_parts))
+    # Line 8: Horizontal divider
+    lines.append("⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯")
     
-    # Add type as separate line if meaningful
-    item_type = result.get('type')
-    if item_type and item_type.lower() not in ['equipment', 'item', 'weapon']:
-        stats_lines.append(f"**Type** {item_type}")
+    # Line 9: Description
+    description = extract_main_description(text)
+    lines.append(description)
     
-    # Add rarity as separate line if not common
-    if result.get('rarity') and result['rarity'].lower() != 'common':
-        stats_lines.append(f"**Rarity** {result['rarity']}")
+    # Line 10: Blank line
+    lines.append("")
     
-    # Add stats section
-    if stats_lines:
-        embed.add_field(
-            name="\u200b",
-            value="\n".join(stats_lines),
-            inline=False
-        )
+    # Line 11: Source
+    source = result.get('source', 'Unknown')
+    source_url = result.get('url', 'https://2e.aonprd.com/')
+    lines.append(f"📘 **Source:** [{source}]({source_url})")
     
-    # Add separator line with special characters
-    embed.add_field(
-        name="\u200b",
-        value="⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯",
-        inline=False
-    )
+    # Line 12: Blank line
+    lines.append("")
     
-    # Extract and add the main description
-    description_text = extract_main_description(text)
+    # Line 13: Favored Weapon header
+    lines.append("****Favored Weapon of****")
     
-    if description_text:
-        embed.add_field(
-            name="\u200b",
-            value=description_text,
-            inline=False
-        )
+    # Line 14: Favored weapon list
+    favored_deities = extract_favored_weapon_info(text)
+    lines.append(favored_deities if favored_deities else "None")
     
-    # Add source with book emoji and formatting
-    if result.get('source'):
-        source_text = f"📘 **Source:** [{result['source']}]({result.get('url', 'https://2e.aonprd.com/')})"
-        embed.add_field(
-            name="\u200b",
-            value=source_text,
-            inline=False
-        )
+    # Line 15: Blank line
+    lines.append("")
     
-    # Add weapon-specific additional information
-    additional_info = extract_additional_weapon_info(text)
-    if additional_info:
-        for section_title, content in additional_info.items():
-            embed.add_field(
-                name=f"****{section_title}****",
-                value=content,
-                inline=False
-            )
+    # Line 16: Critical Specialization header
+    group_name = weapon_stats.get('group', 'Unknown').title()
+    lines.append(f"****Critical Specialization Effect ({group_name} Group):****")
     
-    # Add other results if available
-    if other_results:
-        other_names = [r['name'] for r in other_results[:3]]
-        embed.add_field(
-            name="🔍 **Other matches**",
-            value=", ".join(other_names) + ("..." if len(other_results) > 3 else ""),
-            inline=False
-        )
+    # Line 17: Critical effect text
+    crit_effect = get_critical_specialization_effect(weapon_stats.get('group', ''))
+    lines.append(crit_effect)
     
-    # Footer with link emoji and proper formatting
-    embed.set_footer(text="🔗 Data from the Archives of Nethys", icon_url="https://2e.aonprd.com/favicon.ico")
+    # Line 18: Blank line
+    lines.append("")
     
-    return embed
+    # Line 19: Specific Magic weapons header
+    lines.append(f"****Specific Magic {result['name']}s:****")
+    
+    # Line 20: Magic weapons list
+    magic_weapons = extract_magic_weapon_info(text)
+    lines.append(magic_weapons if magic_weapons else "None")
+    
+    # Line 21: Blank line
+    lines.append("")
+    
+    # Line 22: Footer
+    lines.append("🔗 Data from the [Archives of Nethys](https://2e.aonprd.com/)")
+    
+    return "\n".join(lines)
 
 def extract_main_description(text):
     """Extract the main descriptive paragraph."""
@@ -445,36 +417,45 @@ def extract_main_description(text):
     # Fallback
     return "A martial weapon used in combat."
 
-def extract_additional_weapon_info(text):
-    """Extract additional weapon information like favored weapons, critical effects, etc."""
-    sections = {}
-    
-    # Extract favored weapon information
+def extract_favored_weapon_info(text):
+    """Extract favored weapon information."""
     favored_match = re.search(r'favored weapon[^.]*?([A-Z][^.]*)', text, re.IGNORECASE)
     if favored_match:
         favored_text = favored_match.group(1).strip()
         # Clean up the list
         favored_text = re.sub(r'\s+', ' ', favored_text)
-        sections["Favored Weapon of"] = favored_text
-    
-    # Extract critical specialization effect
-    crit_match = re.search(r'critical specialization[^.]*?([^.]*effect[^.]*)', text, re.IGNORECASE)
-    if crit_match:
-        crit_text = crit_match.group(1).strip()
-        # Try to get the sword group effect specifically
-        if 'sword' in text.lower():
-            sections["Critical Specialization Effect (Sword Group)"] = "On a critical hit, if the target is adjacent to one of your allies, it becomes **flat-footed** until the start of your next turn."
-    
-    # Extract specific magic weapons
+        return favored_text
+    return None
+
+def extract_magic_weapon_info(text):
+    """Extract specific magic weapons information."""
     magic_match = re.search(r'specific magic[^.]*?([A-Z][^.]*)', text, re.IGNORECASE)
     if magic_match:
         magic_text = magic_match.group(1).strip()
         # Clean up the list
         magic_text = re.sub(r'\s+', ' ', magic_text)
-        weapon_name = "Longswords" if "longsword" in text.lower() else "Items"
-        sections[f"Specific Magic {weapon_name}"] = magic_text
+        return magic_text
+    return None
+
+def get_critical_specialization_effect(weapon_group):
+    """Get the critical specialization effect for a weapon group."""
+    effects = {
+        'sword': "The target is made off-balance by your attack, becoming **flat-footed** until the start of your next turn.",
+        'axe': "Choose one creature adjacent to the initial target and within reach. If its AC is lower than your attack roll result for the critical hit, you deal damage to that creature equal to the result of the weapon damage die you rolled (including extra dice for its *striking* rune, if any). This amount isn't doubled, and no bonuses or other additional dice apply to this damage.",
+        'bow': "If the target of the critical hit is adjacent to a surface, you pin the target to that surface by driving the missile deep into the target and the surface. The target is **immobilized** and must spend an Interact action to attempt a DC 10 Athletics check to pull the missile free; it can't move from its space until it succeeds. The creature doesn't become stuck if it is incorporeal, is liquid (like a water elemental or some oozes), or could otherwise escape without effort.",
+        'club': "You knock the target away from you up to 10 feet (you choose the distance). This is forced movement.",
+        'dart': "Your target takes 1d6 persistent bleed damage. You gain an item bonus to this bleed damage equal to the weapon's item bonus to attack rolls.",
+        'flail': "The target is knocked **prone**.",
+        'hammer': "The target is knocked **prone**.",
+        'knife': "The target takes 1d6 persistent bleed damage. You gain an item bonus to this bleed damage equal to the weapon's item bonus to attack rolls.",
+        'pick': "The weapon viciously pierces the target, who takes 2 additional damage per weapon damage die.",
+        'polearm': "The target is moved 5 feet in a direction of your choice. This is forced movement.",
+        'shield': "You knock the target back from you 5 feet. This is forced movement.",
+        'sling': "The target must succeed at a Fortitude save against your class DC or be **stunned 1**.",
+        'spear': "The weapon pierces the target, weakening its attacks. The target takes a –2 circumstance penalty to damage rolls for 1 round.",
+    }
     
-    return sections
+    return effects.get(weapon_group.lower(), "No specific effect for this weapon group.")
 
 # --- BOT SETUP ---
 class PF2eBot(commands.Bot):
@@ -560,78 +541,57 @@ async def search_command(
         results = await search_aon_api(query, result_limit=3, category_filter=category)
         
         if not results:
-            embed = discord.Embed(
-                title="No Results Found",
-                description=f"Sorry, I couldn't find anything matching **{query}**.\n\n"
-                           f"Try:\n• Different search terms\n• Checking your spelling\n• Using a broader category",
-                color=discord.Color.red()
+            await interaction.followup.send(
+                f"**No Results Found**\n\n"
+                f"Sorry, I couldn't find anything matching **{query}**.\n\n"
+                f"Try:\n• Different search terms\n• Checking your spelling\n• Using a broader category"
             )
-            await interaction.followup.send(embed=embed)
             return
         
         # Get best result
         best_result = results[0]
         
-        # Create embed
-        embed = create_embed_from_result(
+        # Create formatted text
+        formatted_text = create_formatted_text_from_result(
             best_result, 
             other_results=results[1:] if len(results) > 1 else None
         )
         
-        # Add search info to embed
-        search_info = f"Search: **{query}**"
-        if category and category != "All":
-            search_info += f" • Category: **{category}**"
-        
-        embed.add_field(name="🔍 Search Info", value=search_info, inline=False)
-        
-        await interaction.followup.send(embed=embed)
+        # Send the formatted text
+        await interaction.followup.send(formatted_text)
         logger.info(f"Search completed for '{query}' by {interaction.user}")
         
     except Exception as e:
         logger.error(f"Error in search command: {e}")
-        embed = discord.Embed(
-            title="Search Error",
-            description="An error occurred while searching. Please try again.",
-            color=discord.Color.red()
+        await interaction.followup.send(
+            "**Search Error**\n\nAn error occurred while searching. Please try again.",
+            ephemeral=True
         )
-        await interaction.followup.send(embed=embed, ephemeral=True)
 
 @bot.tree.command(name="help", description="Show help information for the bot")
 async def help_command(interaction: discord.Interaction):
     """Show bot help information."""
     
-    embed = discord.Embed(
-        title="🏰 Archives of Nethys Bot Help",
-        description="Search for Pathfinder 2e content with modern slash commands!",
-        color=discord.Color.blue()
-    )
+    help_text = """**🏰 Archives of Nethys Bot Help**
+
+Search for Pathfinder 2e content with modern slash commands!
+
+**🔍 /search**
+Search for any PF2e content
+• **query**: What to search for
+• **category**: Filter by type (optional)
+
+**📚 /help**
+Show this help message
+
+**💡 Tips**
+• Use autocomplete for faster searches
+• Try different search terms if you don't find what you need
+• Category filters help narrow down results
+
+🔗 Data from Archives of Nethys"""
     
-    embed.add_field(
-        name="🔍 /search",
-        value="Search for any PF2e content\n"
-              "• **query**: What to search for\n"
-              "• **category**: Filter by type (optional)",
-        inline=False
-    )
-    
-    embed.add_field(
-        name="📚 /help",
-        value="Show this help message",
-        inline=False
-    )
-    
-    embed.add_field(
-        name="💡 Tips",
-        value="• Use autocomplete for faster searches\n"
-              "• Try different search terms if you don't find what you need\n"
-              "• Category filters help narrow down results",
-        inline=False
-    )
-    
-    embed.set_footer(text="Data from Archives of Nethys")
-    
-    await interaction.response.send_message(embed=embed)
+    await interaction.response.send_message(help_text)
 
 # --- ERROR HANDLING ---
 @bot.tree.error
