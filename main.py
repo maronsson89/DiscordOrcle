@@ -17,11 +17,13 @@ import sys
 import time
 from html import unescape
 from typing import Optional, List
+import json
 
 import aiohttp
 import discord
 from discord import app_commands
 from discord.ext import commands
+import openai
 
 # ── Logging ─────────────────────────────────────────────────────
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(name)s: %(message)s")
@@ -32,6 +34,12 @@ TOKEN = os.getenv("DiscordOracle") or os.getenv("DISCORD_TOKEN")
 if not TOKEN:
     logger.error("Discord token missing (DiscordOracle / DISCORD_TOKEN)")
     sys.exit(1)
+
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+if not OPENAI_API_KEY:
+    logger.warning("OPENAI_API_KEY not found. AI formatting will be disabled.")
+    
+client = openai.AsyncOpenAI(api_key=OPENAI_API_KEY)
 
 AON_API_BASE = "https://elasticsearch.aonprd.com/aon/_search"
 AON_WEB_BASE = "https://2e.aonprd.com/"
@@ -348,55 +356,71 @@ def get_rarity_color(rarity: str | None) -> discord.Color:
 def truncate(text: str, max_len: int) -> str:
     return (text[:max_len - 3] + '...') if len(text) > max_len else text
 
-def format_weapon_embed(res: dict) -> discord.Embed:
-    raw = clean_text(res.get("text"))
-    stats = parse_weapon_stats(raw)
-    traits = res.get("trait_raw", [])
-    color = get_rarity_color(res.get("rarity"))
-    embed = discord.Embed(
-        title=res.get("name", "Unknown"),
-        url=res.get("url"),
-        description=main_desc(raw),
-        color=color
-    )
-    damage_str = stats.get('damage')
-    embed.add_field(name="Traits", value=truncate(format_traits(traits, damage_str), 1024), inline=False)
+async def format_weapon_embed_with_gpt(res: dict) -> discord.Embed:
+    """
+    Uses GPT-4o Mini to format the weapon embed from raw AoN JSON data.
+    """
+    if not OPENAI_API_KEY:
+        return format_default_embed(res)
 
-    prop_text = f"**Price** {res.get('price', 'N/A')}"
-    if (level := res.get('level')) is not None:
-        prop_text += f"\n**Level** {level}"
-    prop_text += f"\n**Bulk** {stats.get('bulk', 'N/A')}"
-    embed.add_field(name="Properties", value=prop_text, inline=True)
+    prompt = f"""
+You are an expert Pathfinder 2e Discord Bot Assistant. Your role is to receive raw JSON data from the Archives of Nethys (AoN) API and transform it into a structured JSON object that can be used to create a Discord embed.
 
-    combat_text = f"**Damage** {stats.get('damage', 'N/A')}\n**Hands** {stats.get('hands', 'N/A')}"
-    embed.add_field(name="Combat", value=combat_text, inline=True)
+RULES:
+1.  Parse the input JSON and create a new JSON object with the following keys: `title`, `url`, `description`, and `fields`.
+2.  `title`: The item's name.
+3.  `url`: The item's AoN URL.
+4.  `description`: The item's flavor text. Extract this from the `text` field, usually after a '---' separator. Filter out boilerplate sentences about "critical specialization" or "favored weapon".
+5.  `fields`: An array of field objects. Each object must have `name`, `value`, and `inline` (boolean) keys.
+6.  Create the following fields, ensuring all values are strings:
+    *   **Traits**: `inline: false`. For the "Versatile" trait, provide the detailed explanation: "Can be used to deal [alternate type] damage instead of its normal [base type] damage. You choose the damage type each time you attack." Other traits should be `code-ticked`.
+    *   **Properties**: `inline: true`. Value should contain Price, Level, and Bulk, each on a new line.
+    *   **Combat**: `inline: true`. Value should contain Damage and Hands, each on a new line.
+    *   **Classification**: `inline: true`. Value should contain Type, Group, and Category, each on a new line.
+    *   **Critical Specialization Effects**: `inline: false`. The value must be formatted as: "**[Group Name]**: [Effect Text] (optional effect).\\nCertain feats, class features, weapon runes, and other effects can grant you additional benefits (might be mandatory)." Use "off-guard".
+    *   **Favored Weapon of**: If present, create this field. `inline: false`. Extract the list of deities.
+    *   **Specific Magic...**: If present, create this field. `inline: false`. Extract the list of specific weapons.
 
-    class_text = f"**Type** {res.get('type', 'Unknown').title()}\n**Group** {stats.get('group', 'N/A').title()}\n**Category** {res.get('category', 'N/A').title()}"
-    embed.add_field(name="Classification", value=class_text, inline=True)
+Return ONLY the JSON object. Do not wrap it in markdown backticks or explain yourself.
 
-    group = stats.get("group")
-    effect = crit_effect(group)
-    group_title = (group or "Unknown").title()
+INPUT DATA:
+{json.dumps(res, indent=2)}
 
-    crit_value = effect
-    if "No specific effect" not in effect:
-        crit_explanation = "Certain feats, class features, weapon runes, and other effects can grant you additional benefits (might be mandatory)."
-        base_effect = effect.rstrip('.… ')
-        crit_value = f"**{group_title}**: {base_effect} (optional effect).\n{crit_explanation}"
+JSON OUTPUT:
+"""
 
-    embed.add_field(
-        name="Critical Specialization Effects",
-        value=crit_value,
-        inline=False
-    )
-    favored_weapon_text = first_after("favored weapon", raw)
-    if favored_weapon_text:
-        embed.add_field(name="Favored Weapon of", value=truncate(favored_weapon_text, 1024), inline=False)
-    specific_magic_text = first_after("specific magic", raw)
-    if specific_magic_text:
-        embed.add_field(name=f"Specific Magic {plural(res['name'])}", value=truncate(specific_magic_text, 1024), inline=False)
-    embed.set_footer(text=f"🔗 Data from Archives of Nethys | Source: {res.get('source', 'N/A')}")
-    return embed
+    try:
+        response = await client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.1,
+            response_format={"type": "json_object"}
+        )
+        content = response.choices[0].message.content
+        embed_data = json.loads(content)
+
+        color = get_rarity_color(res.get("rarity"))
+        embed = discord.Embed(
+            title=embed_data.get("title"),
+            url=embed_data.get("url"),
+            description=embed_data.get("description"),
+            color=color
+        )
+
+        for field in embed_data.get("fields", []):
+            embed.add_field(
+                name=field.get("name"),
+                value=field.get("value"),
+                inline=field.get("inline", False)
+            )
+        
+        embed.set_footer(text=f"🔗 Data from Archives of Nethys | Source: {res.get('source', 'N/A')}")
+        return embed
+
+    except Exception as e:
+        logger.error(f"Error formatting with GPT: {e}")
+        # Fallback to the old method if GPT fails
+        return format_default_embed(res)
 
 def format_spell_embed(res: dict) -> discord.Embed:
     raw = clean_text(res.get("text"))
@@ -432,12 +456,12 @@ def format_default_embed(res: dict) -> discord.Embed:
     embed.set_footer(text=f"🔗 Data from Archives of Nethys | Source: {res.get('source', 'N/A')}")
     return embed
 
-def format_result_embed(res: dict) -> discord.Embed:
+async def format_result_embed(res: dict) -> discord.Embed:
     type_ = (res.get("type") or "").lower()
     category = (res.get("category") or "").lower()
 
     if type_ == "weapon" or category == "weapon":
-        return format_weapon_embed(res)
+        return await format_weapon_embed_with_gpt(res)
     if type_ == "spell":
         return format_spell_embed(res)
     return format_default_embed(res)
@@ -493,7 +517,7 @@ async def cmd_search(inter: discord.Interaction, query: str, category: Optional[
         await safe_followup(inter, content=f"**No results found for `{query}`**")
         return
 
-    embed = format_result_embed(results[0])
+    embed = await format_result_embed(results[0])
     await safe_followup(inter, embed=embed)
 
 # safe helpers for follow‑ups and defer
@@ -547,4 +571,6 @@ if __name__ == "__main__":
         bot.run(TOKEN)
     except discord.errors.LoginFailure:
         logger.error("Invalid token — check DISCORD_TOKEN/DiscordOracle.")
+
+
 
