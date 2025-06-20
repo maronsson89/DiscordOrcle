@@ -239,7 +239,8 @@ def first_after(label: str, text: str) -> Optional[str]:
 def main_desc(text: str) -> str:
     sents = [s.strip() for s in text.split(".") if len(s.strip()) > 15]
     keep = [s for s in sents if not any(k in s.lower() for k in ("source", "favored weapon", "specific magic", "price", "bulk", "hands", "damage", "category"))]
-    return (". ".join(keep[:2]) + ".") if keep else "No description available."
+    desc = (". ".join(keep[:2]) + ".") if keep else "No description available."
+    return (desc[:4093] + '...') if len(desc) > 4096 else desc
 
 def get_rarity_color(rarity: str | None) -> discord.Color:
     rarity = (rarity or "common").lower()
@@ -250,6 +251,9 @@ def get_rarity_color(rarity: str | None) -> discord.Color:
     if rarity == "unique":
         return discord.Color.gold()
     return discord.Color.default()
+
+def truncate(text: str, max_len: int) -> str:
+    return (text[:max_len - 3] + '...') if len(text) > max_len else text
 
 def format_weapon_embed(res: dict) -> discord.Embed:
     raw = clean_text(res.get("text"))
@@ -262,7 +266,7 @@ def format_weapon_embed(res: dict) -> discord.Embed:
         description=main_desc(raw),
         color=color
     )
-    embed.add_field(name="Traits", value="".join(f"［ {t} ］" for t in traits) or "None", inline=True)
+    embed.add_field(name="Traits", value=truncate("".join(f"［ {t} ］" for t in traits) or "None", 1024), inline=True)
     embed.add_field(name="Core Stats", value=f"**Price:** {res.get('price', 'N/A')}\n**Bulk:** {stats.get('bulk', 'N/A')}\n**Hands:** {stats.get('hands', 'N/A')}", inline=True)
     embed.add_field(
         name="Combat Stats",
@@ -277,10 +281,10 @@ def format_weapon_embed(res: dict) -> discord.Embed:
     )
     favored_weapon_text = first_after("favored weapon", raw)
     if favored_weapon_text:
-        embed.add_field(name="Favored Weapon of", value=favored_weapon_text, inline=True)
+        embed.add_field(name="Favored Weapon of", value=truncate(favored_weapon_text, 1024), inline=True)
     specific_magic_text = first_after("specific magic", raw)
     if specific_magic_text:
-        embed.add_field(name=f"Specific Magic {plural(res['name'])}", value=specific_magic_text, inline=True)
+        embed.add_field(name=f"Specific Magic {plural(res['name'])}", value=truncate(specific_magic_text, 1024), inline=True)
     embed.set_footer(text=f"🔗 Data from Archives of Nethys | Source: {res.get('source', 'N/A')}")
     return embed
 
@@ -294,7 +298,7 @@ def format_spell_embed(res: dict) -> discord.Embed:
         description=main_desc(raw),
         color=color
     )
-    embed.add_field(name="Traits", value="".join(f"［ {t} ］" for t in traits) or "None", inline=False)
+    embed.add_field(name="Traits", value=truncate("".join(f"［ {t} ］" for t in traits) or "None", 1024), inline=False)
     if res.get('level'):
         embed.add_field(name="Level", value=str(res.get('level')), inline=True)
     embed.set_footer(text=f"🔗 Data from Archives of Nethys | Source: {res.get('source', 'N/A')}")
@@ -310,7 +314,7 @@ def format_default_embed(res: dict) -> discord.Embed:
         description=main_desc(raw),
         color=color
     )
-    embed.add_field(name="Traits", value="".join(f"［ {t} ］" for t in traits) or "None", inline=False)
+    embed.add_field(name="Traits", value=truncate("".join(f"［ {t} ］" for t in traits) or "None", 1024), inline=False)
     if res.get("level"):
         embed.add_field(name="Level", value=str(res.get("level")), inline=True)
     if res.get("category"):
@@ -327,8 +331,6 @@ def format_result_embed(res: dict) -> discord.Embed:
     if type_ == "spell":
         return format_spell_embed(res)
     return format_default_embed(res)
-
-# ── Discord helpers ──────────────────────────────────────────
 
 # ── Autocomplete data ────────────────────────────────────────
 POPULAR_TERMS = [
@@ -401,6 +403,15 @@ async def safe_followup(inter: discord.Interaction, content: str | None = None, 
             await target(content)
     except Exception as err:
         logger.error("follow‑up failed: %s", err)
+        try:
+            error_message = "Sorry, I was unable to display the result for your query. An unexpected error occurred."
+            if inter.response.is_done():
+                await inter.followup.send(error_message, ephemeral=True)
+            else:
+                await inter.response.send_message(error_message, ephemeral=True)
+        except Exception as final_err:
+            logger.error("Failed to send final error message: %s", final_err)
+
 
 # ── /help command ───────────────────────────────────────────
 @bot.tree.command(name="help", description="Show help information")
