@@ -78,10 +78,6 @@ DMG_RE = [
 BULK_RE = [re.compile(p, re.I) for p in (r"bulk\s+([0-9]+|L|-)", r"bulk: ?([0-9]+|L|-)")]
 HANDS_RE = [re.compile(p, re.I) for p in (r"hands?\s+(\d+)", r"hands?: ?(\d+)")]
 GROUP_RE = [re.compile(p, re.I) for p in (r"group\s+(\w+)", r"weapon\s+group: ?(\w+)")]
-TRAIT_RE = re.compile(
-    r"\b(backswing|disarm|reach|trip|finesse|agile|deadly|fatal|parry|sweep|forceful|shove|twin|monk|unarmed|free-hand|grapple|nonlethal|propulsive|volley|ranged|thrown|versatile\s+[a-z])\b",
-    re.I,
-)
 
 # ── Utility helpers ───────────────────────────────────────────
 
@@ -121,7 +117,7 @@ async def search_aon_api(query: str, *, result_limit: int = 5, category_filter: 
     body = {
         "query": {"bool": bool_query},
         "size": result_limit,
-        "_source": ["name", "type", "url", "text", "level", "price", "category", "source", "rarity"],
+        "_source": ["name", "type", "url", "text", "level", "price", "category", "source", "rarity", "trait_raw"],
         "sort": [{"_score": {"order": "desc"}}, {"name.keyword": {"order": "asc"}}],
     }
 
@@ -149,6 +145,7 @@ async def search_aon_api(query: str, *, result_limit: int = 5, category_filter: 
             "category": src.get("category"),
             "source": src.get("source"),
             "rarity": src.get("rarity"),
+            "trait_raw": src.get("trait_raw", []),
         })
 
     await search_cache.set(cache_key, results)
@@ -156,21 +153,6 @@ async def search_aon_api(query: str, *, result_limit: int = 5, category_filter: 
 
 
 # ── Parsing helpers ───────────────────────────────────────────
-
-def parse_traits(text: str) -> List[str]:
-    traits: List[str] = []
-    seen: set[str] = set()
-    for m in TRAIT_RE.finditer(text):
-        token = m.group(0)
-        if token.lower().startswith("versatile"):
-            token = f"Versatile {token.split()[-1].upper()}"
-        else:
-            token = token.title()
-        if token not in seen:
-            seen.add(token)
-            traits.append(token)
-    return traits
-
 
 def parse_weapon_stats(text: str) -> dict[str, str]:
     stats: dict[str, str] = {}
@@ -238,7 +220,11 @@ def first_after(label: str, text: str) -> Optional[str]:
 
 def main_desc(text: str) -> str:
     sents = [s.strip() for s in text.split(".") if len(s.strip()) > 15]
-    keep = [s for s in sents if not any(k in s.lower() for k in ("source", "favored weapon", "specific magic", "price", "bulk", "hands", "damage", "category"))]
+    bad_keywords = (
+        "source", "favored weapon", "specific magic", "price", "bulk", "hands",
+        "damage", "category", "group", "type", "level"
+    )
+    keep = [s for s in sents if not any(k in s.lower() for k in bad_keywords)]
     desc = (". ".join(keep[:2]) + ".") if keep else "No description available."
     return (desc[:4093] + '...') if len(desc) > 4096 else desc
 
@@ -258,7 +244,7 @@ def truncate(text: str, max_len: int) -> str:
 def format_weapon_embed(res: dict) -> discord.Embed:
     raw = clean_text(res.get("text"))
     stats = parse_weapon_stats(raw)
-    traits = parse_traits(raw)
+    traits = res.get("trait_raw", [])
     color = get_rarity_color(res.get("rarity"))
     embed = discord.Embed(
         title=res.get("name", "Unknown"),
@@ -267,16 +253,13 @@ def format_weapon_embed(res: dict) -> discord.Embed:
         color=color
     )
     embed.add_field(name="Traits", value=truncate(" ".join(f"`{t}`" for t in traits) or "None", 1024), inline=False)
-    embed.add_field(
-        name="Core Stats",
-        value=f"**Price:** {res.get('price', 'N/A')}\n**Bulk:** {stats.get('bulk', 'N/A')}\n**Hands:** {stats.get('hands', 'N/A')}",
-        inline=True
+    stats_text = (
+        f"**Price:** {res.get('price', 'N/A')}\n"
+        f"**Damage:** {stats.get('damage', 'N/A')}\n"
+        f"**Bulk:** {stats.get('bulk', 'N/A')}; **Hands:** {stats.get('hands', 'N/A')}\n"
+        f"**Group:** {stats.get('group', 'N/A')}; **Category:** {res.get('category', 'N/A')}"
     )
-    embed.add_field(
-        name="Damage & Group",
-        value=f"**Damage:** {stats.get('damage', 'N/A')}\n**Group:** {stats.get('group', 'N/A')}\n**Category:** {res.get('category', 'N/A')}",
-        inline=True
-    )
+    embed.add_field(name="Statistics", value=stats_text, inline=False)
     group_title = stats.get("group", "Unknown").title()
     embed.add_field(
         name=f"Critical Specialization ({group_title} Group)",
@@ -285,16 +268,16 @@ def format_weapon_embed(res: dict) -> discord.Embed:
     )
     favored_weapon_text = first_after("favored weapon", raw)
     if favored_weapon_text:
-        embed.add_field(name="Favored Weapon of", value=truncate(favored_weapon_text, 1024), inline=True)
+        embed.add_field(name="Favored Weapon of", value=truncate(favored_weapon_text, 1024), inline=False)
     specific_magic_text = first_after("specific magic", raw)
     if specific_magic_text:
-        embed.add_field(name=f"Specific Magic {plural(res['name'])}", value=truncate(specific_magic_text, 1024), inline=True)
+        embed.add_field(name=f"Specific Magic {plural(res['name'])}", value=truncate(specific_magic_text, 1024), inline=False)
     embed.set_footer(text=f"🔗 Data from Archives of Nethys | Source: {res.get('source', 'N/A')}")
     return embed
 
 def format_spell_embed(res: dict) -> discord.Embed:
     raw = clean_text(res.get("text"))
-    traits = parse_traits(raw)
+    traits = res.get("trait_raw", [])
     color = get_rarity_color(res.get("rarity"))
     embed = discord.Embed(
         title=res.get("name", "Unknown"),
@@ -304,13 +287,13 @@ def format_spell_embed(res: dict) -> discord.Embed:
     )
     embed.add_field(name="Traits", value=truncate(" ".join(f"`{t}`" for t in traits) or "None", 1024), inline=False)
     if res.get('level'):
-        embed.add_field(name="Level", value=str(res.get('level')), inline=True)
+        embed.add_field(name="Level", value=str(res.get('level')), inline=False)
     embed.set_footer(text=f"🔗 Data from Archives of Nethys | Source: {res.get('source', 'N/A')}")
     return embed
 
 def format_default_embed(res: dict) -> discord.Embed:
     raw = clean_text(res.get("text"))
-    traits = parse_traits(raw)
+    traits = res.get("trait_raw", [])
     color = get_rarity_color(res.get("rarity"))
     embed = discord.Embed(
         title=res.get("name", "Unknown"),
@@ -320,9 +303,9 @@ def format_default_embed(res: dict) -> discord.Embed:
     )
     embed.add_field(name="Traits", value=truncate(" ".join(f"`{t}`" for t in traits) or "None", 1024), inline=False)
     if res.get("level"):
-        embed.add_field(name="Level", value=str(res.get("level")), inline=True)
+        embed.add_field(name="Level", value=str(res.get("level")), inline=False)
     if res.get("category"):
-        embed.add_field(name="Category", value=res.get("category"), inline=True)
+        embed.add_field(name="Category", value=res.get("category"), inline=False)
     embed.set_footer(text=f"🔗 Data from Archives of Nethys | Source: {res.get('source', 'N/A')}")
     return embed
 
