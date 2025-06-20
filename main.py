@@ -395,12 +395,17 @@ async def interaction_response_defer_safe(inter: discord.Interaction):
             pass
 
 async def safe_followup(inter: discord.Interaction, content: str | None = None, *, embed: discord.Embed | None = None):
-    target = inter.followup if inter.response.is_done() else inter.response.send_message
     try:
-        if embed:
-            await target(embed=embed)
-        elif content:
-            await target(content)
+        if inter.response.is_done():
+            if embed:
+                await inter.followup.send(embed=embed)
+            elif content:
+                await inter.followup.send(content)
+        else:
+            if embed:
+                await inter.response.send_message(embed=embed)
+            elif content:
+                await inter.response.send_message(content)
     except Exception as err:
         logger.error("follow‑up failed: %s", err)
         try:
