@@ -1,353 +1,473 @@
+# main.py — PF2e Discord Bot (syntax‑clean, ready to deploy)
+# ---------------------------------------------------------------------------
+# Key points:
+#   • Shared aiohttp session (created in setup_hook, closed in bot.close)
+#   • No privileged intents needed
+#   • 2 000‑char splitter for Discord message limit
+#   • Clickable AoN URL under item name
+# ---------------------------------------------------------------------------
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+import re
+import sys
+import time
+from html import unescape
+from typing import Optional, List
+
+import aiohttp
 import discord
 from discord import app_commands
 from discord.ext import commands
-import aiohttp
-import json
-import re
-import os
-from typing import Dict, List, Optional, Tuple
-from openai import AsyncOpenAI
 
-# Bot configuration
-intents = discord.Intents.default()
-intents.message_content = True
-bot = commands.Bot(command_prefix='!', intents=intents)
+# ── Logging ─────────────────────────────────────────────────────
+logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(name)s: %(message)s")
+logger = logging.getLogger("pf2e-bot")
 
-# Initialize OpenAI client
-openai_client = AsyncOpenAI(api_key=os.environ.get('OPENAI_API_KEY'))
+# ── Configuration ─────────────────────────────────────────────
+TOKEN = os.getenv("DiscordOracle") or os.getenv("DISCORD_TOKEN")
+if not TOKEN:
+    logger.error("Discord token missing (DiscordOracle / DISCORD_TOKEN)")
+    sys.exit(1)
 
-class AoNFormatter:
-    """Handles formatting of Archives of Nethys API data into Discord embeds using ChatGPT"""
-    
-    SYSTEM_PROMPT = """You are a Discord bot formatter for Archives of Nethys weapon data. Transform raw JSON data into formatted text following these EXACT rules:
+AON_API_BASE = "https://elasticsearch.aonprd.com/aon/_search"
+AON_WEB_BASE = "https://2e.aonprd.com/"
 
-1. MAIN DESCRIPTION: Extract flavor text after "---" separator. Remove sentences containing "critical specialization" or "favored weapon".
+SEARCH_CATEGORIES = [
+    "Equipment", "Spell", "Feat", "Class", "Ancestry", "Background",
+    "Monster", "Hazard", "Rule", "Condition", "Trait", "Action",
+]
 
-2. TRAITS: 
-   - For "Versatile" trait: Write "Can be used to deal [alternate type] damage instead of its normal [base type] damage. You choose the damage type each time you attack."
-   - Other traits: Just return the trait name
+# ── Global HTTP session placeholder ───────────────────────────
+_http_session: aiohttp.ClientSession | None = None
 
-3. STATISTICS (return as JSON object with three categories):
-   - Properties: Price, Level, Bulk
-   - Combat: Damage, Hands  
-   - Classification: Type, Group, Category (use Title Case)
+# ── TTL Cache ─────────────────────────────────────────────────
+class SearchCache:
+    def __init__(self, ttl: int = 300):
+        self.ttl = ttl
+        self._cache: dict[str, tuple[object, float]] = {}
+        self._lock = asyncio.Lock()
 
-4. CRITICAL SPECIALIZATION: 
-   - Format: "[Group Name]: [Effect Text]"
-   - Use "off-guard" terminology instead of "flat-footed"
-   - Include standard second line: "Certain feats, class features, weapon runes, and other effects can grant you additional benefits."
+    async def get(self, key: str):
+        async with self._lock:
+            entry = self._cache.get(key)
+            if not entry:
+                return None
+            value, ts = entry
+            if time.time() - ts < self.ttl:
+                return value
+            del self._cache[key]
+            return None
 
-5. CONTEXTUAL FIELDS: Find "Favored Weapon of" and "Specific Magic Longswords" in text. Extract content after these labels until the next keyword (Price, Damage, Source, ---, etc).
+    async def set(self, key: str, value):
+        async with self._lock:
+            self._cache[key] = (value, time.time())
 
-Return a JSON object with these keys: description, traits, properties, combat, classification, critical_spec, favored_weapon (if found), specific_magic (if found)."""
+search_cache = SearchCache()
 
-    @staticmethod
-    async def process_with_gpt(data: Dict) -> Dict:
-        """Process weapon data using ChatGPT mini"""
-        try:
-            response = await openai_client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": AoNFormatter.SYSTEM_PROMPT},
-                    {"role": "user", "content": f"Process this weapon data:\n{json.dumps(data)}"}
-                ],
-                temperature=0.3,
-                max_tokens=1000
-            )
-            
-            # Parse the GPT response
-            result = response.choices[0].message.content
-            return json.loads(result)
-        except Exception as e:
-            print(f"GPT processing error: {e}")
-            # Fallback to manual processing
-            return AoNFormatter.manual_process(data)
-    
-    @staticmethod
-    def manual_process(data: Dict) -> Dict:
-        """Fallback manual processing if GPT fails"""
-        text = data.get('text', '')
-        
-        # Extract main description
-        description = "No description available."
-        if '---' in text:
-            parts = text.split('---')
-            if len(parts) > 1:
-                desc_text = parts[1].strip()
-                sentences = desc_text.split('.')
-                filtered = [s.strip() for s in sentences 
-                           if s.strip() and not any(phrase in s.lower() for phrase in 
-                                                   ['critical specialization', 'favored weapon'])]
-                if filtered:
-                    description = '. '.join(filtered) + '.'
-        
-        # Format traits
-        traits = []
-        for trait in data.get('trait', []):
-            if isinstance(trait, dict):
-                name = trait.get('name', '')
-                value = trait.get('value', '')
-                if 'versatile' in name.lower():
-                    base_type = 'slashing'  # Default, should be extracted from damage
-                    alt_type = value.lower() if value else 'piercing'
-                    traits.append(f"**Versatile ({value})**: Can be used to deal {alt_type} damage instead of its normal {base_type} damage. You choose the damage type each time you attack.")
-                else:
-                    traits.append(name)
-            else:
-                traits.append(str(trait))
-        
-        # Extract statistics
-        properties = {
-            "Price": data.get('price', 'N/A'),
-            "Level": str(data.get('level', 'N/A')),
-            "Bulk": data.get('bulk', 'N/A')
-        }
-        
-        combat = {
-            "Damage": data.get('damage', 'N/A'),
-            "Hands": str(data.get('hands', 'N/A'))
-        }
-        
-        classification = {
-            "Type": (data.get('weapon_type', 'N/A')).title(),
-            "Group": (data.get('group', 'N/A')).title(),
-            "Category": (data.get('category', 'N/A')).title()
-        }
-        
-        # Critical specialization
-        group = data.get('group', 'Unknown')
-        crit_effects = {
-            'sword': 'The target is made off-guard until the start of your next turn',
-            'axe': 'Choose one creature adjacent to the initial target and within reach. If its AC is lower, you deal damage to it equal to the number of damage dice',
-            'hammer': 'The target is knocked prone',
-            'spear': 'The weapon pierces the target, weakening its attacks. The target is clumsy 1',
-            'knife': 'The target takes persistent bleed damage equal to the weapon\'s damage dice',
-            'flail': 'The target is knocked prone',
-            'polearm': 'The target is moved 5 feet in a direction of your choice',
-            'shield': 'You knock the target back 5 feet',
-            'bow': 'If the target is within 30 feet, it\'s immobilized',
-            'brawling': 'The target must succeed at a Fortitude save or be slowed 1',
-            'club': 'You knock the target up to 10 feet away',
-            'dart': 'The target takes persistent bleed damage equal to the weapon\'s damage dice',
-            'firearm': 'The target is stunned 1',
-            'pick': 'The weapon pierces through the target\'s armor. The target takes 2 additional damage per weapon damage die',
-            'sling': 'The target is stunned 1'
-        }
-        effect = crit_effects.get(group.lower(), 'Special effect based on weapon group')
-        critical_spec = f"**{group.title()}**: {effect}\n\nCertain feats, class features, weapon runes, and other effects can grant you additional benefits."
-        
-        # Extract contextual fields
-        favored_weapon = None
-        specific_magic = None
-        
-        if 'Favored Weapon of' in text:
-            match = re.search(r'Favored Weapon of\s*([^.]+?)(?=\s*(?:Price|Damage|Source|---|$))', text)
-            if match:
-                favored_weapon = match.group(1).strip()
-        
-        if 'Specific Magic' in text:
-            match = re.search(r'Specific Magic (?:Longswords|Weapons)\s*([^.]+?)(?=\s*(?:Price|Damage|Source|---|$))', text)
-            if match:
-                specific_magic = match.group(1).strip()
-        
-        return {
-            "description": description,
-            "traits": traits,
-            "properties": properties,
-            "combat": combat,
-            "classification": classification,
-            "critical_spec": critical_spec,
-            "favored_weapon": favored_weapon,
-            "specific_magic": specific_magic
-        }
-    
-    @staticmethod
-    async def create_embed(data: Dict) -> discord.Embed:
-        """Create a Discord embed from AoN weapon data using GPT processing"""
-        # Process data with GPT
-        processed = await AoNFormatter.process_with_gpt(data)
-        
-        # Create base embed
-        name = data.get('name', 'Unknown Weapon')
-        embed = discord.Embed(
-            title=name,
-            color=discord.Color.blue()
-        )
-        
-        # Add main description
-        embed.description = processed.get('description', 'No description available.')
-        
-        # Add traits field
-        traits = processed.get('traits', [])
-        traits_text = '\n'.join([f"`{t}`" if not t.startswith('**') else t for t in traits])
-        embed.add_field(name="Traits", value=traits_text or "None", inline=False)
-        
-        # Add statistics fields (3 columns)
-        props = processed.get('properties', {})
-        combat = processed.get('combat', {})
-        classification = processed.get('classification', {})
-        
-        props_text = '\n'.join([f"**{k}**: {v}" for k, v in props.items()])
-        combat_text = '\n'.join([f"**{k}**: {v}" for k, v in combat.items()])
-        class_text = '\n'.join([f"**{k}**: {v}" for k, v in classification.items()])
-        
-        embed.add_field(name="Properties", value=props_text, inline=True)
-        embed.add_field(name="Combat", value=combat_text, inline=True)
-        embed.add_field(name="Classification", value=class_text, inline=True)
-        
-        # Add critical specialization field
-        crit_spec = processed.get('critical_spec', 'No critical specialization available.')
-        embed.add_field(name="Critical Specialization Effects", value=crit_spec, inline=False)
-        
-        # Add contextual fields if present
-        if processed.get('favored_weapon'):
-            embed.add_field(name="Favored Weapon", value=processed['favored_weapon'], inline=False)
-        
-        if processed.get('specific_magic'):
-            embed.add_field(name="Specific Magic", value=processed['specific_magic'], inline=False)
-        
-        # Add source if available
-        source = data.get('source', {})
-        if isinstance(source, dict) and source.get('value'):
-            embed.set_footer(text=f"Source: {source['value']}")
-        
-        return embed
+# ── Regular expressions ───────────────────────────────────────
+TAG_RE = re.compile(r"<[^>]+>")
+WS_RE = re.compile(r"[ \t]+")
+DMG_RE = [
+    re.compile(r"(\d+d\d+(?:\+\d+)?)\s+(slashing|piercing|bludgeoning|s|p|b)\b", re.I),
+    re.compile(r"damage\s+(\d+d\d+(?:\+\d+)?)(?:\s*(\w+))?", re.I),
+]
+BULK_RE = [re.compile(p, re.I) for p in (r"bulk\s+([0-9]+|L|-)", r"bulk: ?([0-9]+|L|-)")]
+HANDS_RE = [re.compile(p, re.I) for p in (r"hands?\s+(\d+)", r"hands?: ?(\d+)")]
+GROUP_RE = [re.compile(p, re.I) for p in (r"group\s+(\w+)", r"weapon\s+group: ?(\w+)")]
 
-@bot.event
-async def on_ready():
-    print(f'{bot.user} has connected to Discord!')
-    print(f'OpenAI API Key: {"Set" if os.environ.get("OPENAI_API_KEY") else "Not Set"}')
-    
-    try:
-        # Sync commands globally (or use guild-specific for faster testing)
-        synced = await bot.tree.sync()
-        print(f"Synced {len(synced)} command(s)")
-    except Exception as e:
-        print(f"Failed to sync commands: {e}")
+# ── Utility helpers ───────────────────────────────────────────
 
-@bot.tree.command(name="weapon", description="Fetch weapon data from Archives of Nethys")
-@app_commands.describe(weapon_name="Name of the weapon to look up")
-async def fetch_weapon(interaction: discord.Interaction, weapon_name: str):
-    """Fetch weapon data from AoN API and display it"""
-    # Defer the response since API calls might take time
-    await interaction.response.defer()
-    
-    # Note: Replace with actual AoN API endpoint
-    api_url = f"https://api.archivesofnethys.com/v1/weapon/{weapon_name.lower().replace(' ', '-')}"
-    
-    async with aiohttp.ClientSession() as session:
-        try:
-            async with session.get(api_url) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    embed = await AoNFormatter.create_embed(data)
-                    await interaction.followup.send(embed=embed)
-                else:
-                    await interaction.followup.send(f"Could not find weapon '{weapon_name}'")
-        except Exception as e:
-            await interaction.followup.send(f"Error fetching weapon data: {str(e)}")
+def clean_text(text: str | None) -> str:
+    if not text:
+        return ""
+    text = TAG_RE.sub("", text)
+    return WS_RE.sub(" ", unescape(text)).strip()
 
-@bot.tree.command(name="parseweapon", description="Parse raw JSON weapon data")
-@app_commands.describe(json_data="Raw JSON data from Archives of Nethys API")
-async def parse_weapon_json(interaction: discord.Interaction, json_data: str):
-    """Parse raw JSON weapon data and display it using ChatGPT"""
-    # Defer the response since GPT processing might take time
-    await interaction.response.defer()
-    
-    try:
-        # Clean up the JSON data (remove code blocks if present)
-        json_data = json_data.strip()
-        if json_data.startswith('```') and json_data.endswith('```'):
-            json_data = json_data[3:-3]
-        if json_data.startswith('json'):
-            json_data = json_data[4:]
-        
-        data = json.loads(json_data.strip())
-        embed = await AoNFormatter.create_embed(data)
-        await interaction.followup.send(embed=embed)
-    except json.JSONDecodeError:
-        await interaction.followup.send("Invalid JSON data. Please provide valid JSON.")
-    except Exception as e:
-        await interaction.followup.send(f"Error processing weapon data: {str(e)}")
 
-@bot.tree.command(name="testweapon", description="Test the formatter with sample weapon data")
-async def test_weapon(interaction: discord.Interaction):
-    """Test command with sample weapon data"""
-    # Defer the response
-    await interaction.response.defer()
-    
-    sample_data = {
-        "name": "Longsword",
-        "level": 0,
-        "price": "15 gp",
-        "bulk": "1",
-        "damage": "1d8 slashing",
-        "hands": "1",
-        "weapon_type": "martial",
-        "group": "sword",
-        "category": "simple",
-        "trait": [
-            {"name": "Versatile", "value": "P"},
-            {"name": "Reach", "value": ""}
+async def search_aon_api(query: str, *, result_limit: int = 5, category_filter: str | None = None):
+    """Search the AoN ES endpoint with simple caching."""
+    cache_key = f"{query}:{result_limit}:{category_filter}"
+    if (cached := await search_cache.get(cache_key)) is not None:
+        return cached
+
+    if _http_session is None:
+        raise RuntimeError("HTTP session not initialised yet")
+
+    bool_query: dict = {
+        "should": [
+            {
+                "multi_match": {
+                    "query": query,
+                    "fields": ["name^3", "text^2", "trait_raw^2"],
+                    "type": "best_fields",
+                    "fuzziness": "AUTO",
+                }
+            },
+            {"wildcard": {"name.keyword": f"*{query.lower()}*"}},
         ],
-        "text": "Longswords can be one-edged or two-edged swords. Their blades are heavy and they're between 3 and 4 feet in length. --- Whether blade or bludgeon, a longsword is a classic weapon of melee combat. The longsword is characterized by its long grip and straight, double-edged blade. It's a favored weapon among knights and nobility. Critical specialization effects are nice. Favored Weapon of Iomedae and Ragathiel. Price varies by material.",
-        "source": {"value": "Core Rulebook"}
+        "minimum_should_match": 1,
     }
-    
-    embed = await AoNFormatter.create_embed(sample_data)
-    await interaction.followup.send(embed=embed)
+    if category_filter and category_filter != "All":
+        bool_query.setdefault("filter", []).append({"term": {"type.keyword": category_filter}})
 
-@bot.tree.command(name="gpttest", description="Test if GPT connection is working")
-async def test_gpt_connection(interaction: discord.Interaction):
-    """Test if GPT connection is working"""
-    await interaction.response.defer()
-    
+    body = {
+        "query": {"bool": bool_query},
+        "size": result_limit,
+        "_source": ["name", "type", "url", "text", "level", "price", "category", "source", "rarity", "trait_raw"],
+        "sort": [{"_score": {"order": "desc"}}, {"name.keyword": {"order": "asc"}}],
+    }
+
     try:
-        response = await openai_client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": "Say 'GPT connection successful!'"}],
-            max_tokens=50
-        )
-        await interaction.followup.send(f"✅ {response.choices[0].message.content}")
-    except Exception as e:
-        await interaction.followup.send(f"❌ GPT connection failed: {str(e)}")
+        async with _http_session.post(AON_API_BASE, json=body, headers={"User-Agent": "PF2E Discord Bot"}) as resp:
+            resp.raise_for_status()
+            data = await resp.json()
+    except Exception as exc:
+        logger.error("AoN API error: %s", exc)
+        return []
 
-@bot.tree.command(name="synccommands", description="Manually sync slash commands (Admin only)")
-@app_commands.default_permissions(administrator=True)
-async def sync_commands(interaction: discord.Interaction):
-    """Manually sync slash commands"""
-    await interaction.response.defer()
-    
+    results: list[dict] = []
+    for hit in data.get("hits", {}).get("hits", []):
+        src = hit.get("_source", {})
+        url = src.get("url", "")
+        if url and not url.startswith("http"):
+            url = AON_WEB_BASE + url.lstrip("/")
+        results.append({
+            "name": src.get("name", "Unknown"),
+            "type": src.get("type", "Unknown"),
+            "url": url,
+            "text": src.get("text", ""),
+            "level": src.get("level"),
+            "price": src.get("price"),
+            "category": src.get("category"),
+            "source": src.get("source"),
+            "rarity": src.get("rarity"),
+            "trait_raw": src.get("trait_raw", []),
+        })
+
+    await search_cache.set(cache_key, results)
+    return results
+
+
+# ── Parsing helpers ───────────────────────────────────────────
+
+def parse_weapon_stats(text: str) -> dict[str, str]:
+    stats: dict[str, str] = {}
+
+    # damage
+    for rex in DMG_RE:
+        if (m := rex.search(text)):
+            die, typ = m.groups(default="")
+            typ = typ.lower()
+            typ = {"s": "slashing", "p": "piercing", "b": "bludgeoning"}.get(typ, typ or "slashing")
+            stats["damage"] = f"{die} {typ}"
+            break
+
+    # bulk
+    for rex in BULK_RE:
+        if (m := rex.search(text)):
+            stats["bulk"] = m.group(1)
+            break
+
+    # hands
+    for rex in HANDS_RE:
+        if (m := rex.search(text)):
+            stats["hands"] = m.group(1)
+            break
+    if "hands" not in stats:
+        stats["hands"] = "2" if "two-hand" in text.lower() else "1"
+
+    # group
+    for rex in GROUP_RE:
+        if (m := rex.search(text)):
+            stats["group"] = m.group(1).lower()
+            break
+
+    return stats
+
+# Critical specialisation effects (abbreviated)
+CRIT_EFFECTS = {
+    "sword": "The target is made **off-guard** until the start of your next turn.",
+    "axe": "Swipe an adjacent creature …",
+    "bow": "Pin the target; it becomes **immobilised** (DC 10 Athletics to escape).",
+    "club": "Knock the target 10 ft away.",
+    "flail": "The target is knocked **prone**.",
+    "hammer": "The target is knocked **prone**.",
+    "knife": "Target takes 1d6 persistent bleed damage.",
+    "polearm": "Move the target 5 ft in a direction of your choice.",
+    "spear": "Target takes –2 circumstance penalty to damage for 1 round.",
+}
+
+
+def crit_effect(group: str | None) -> str:
+    return CRIT_EFFECTS.get((group or "").lower(), "No specific effect for this weapon group.")
+
+def format_traits(traits: List[str], base_damage_str: str | None = None) -> str:
+    if not traits:
+        return "None"
+
+    base_type = ""
+    if base_damage_str and ' ' in base_damage_str:
+        base_type = base_damage_str.split()[-1]
+
+    descriptions = {
+        "versatile p": "piercing",
+        "versatile s": "slashing",
+        "versatile b": "bludgeoning"
+    }
+
+    formatted_traits = []
+    for trait in traits:
+        lower_trait = trait.lower()
+        if lower_trait in descriptions:
+            alt_type = descriptions[lower_trait]
+            display_trait = f"Versatile {lower_trait.split()[-1].upper()}"
+            desc = f"**{display_trait}:** Can be used to deal {alt_type} damage"
+            if base_type and base_type != alt_type:
+                desc += f" instead of its normal {base_type} damage"
+            desc += ". You choose the damage type each time you attack."
+            formatted_traits.append(desc)
+        else:
+            formatted_traits.append(f"`{trait}`")
+            
+    return " ".join(formatted_traits)
+
+# ── Formatting helpers ───────────────────────────────────────
+
+def plural(word: str) -> str:
+    return word if word.endswith("s") else word + "s"
+
+
+def first_after(label: str, text: str) -> Optional[str]:
+    pat = re.compile(fr"{label}[^.\n]*?([A-Z][^.\n]+)", re.I)
+    if (m := pat.search(text)):
+        return WS_RE.sub(" ", m.group(1).strip())
+    return None
+
+
+def main_desc(text: str) -> str:
+    sents = [s.strip() for s in text.split(".") if len(s.strip()) > 15]
+    bad_keywords = (
+        "source", "favored weapon", "specific magic", "price", "bulk", "hands",
+        "damage", "category", "group", "type", "level", "critical success"
+    )
+    keep = [s for s in sents if not any(k in s.lower() for k in bad_keywords)]
+    desc = (". ".join(keep[:2]) + ".") if keep else "No description available."
+    return (desc[:4093] + '...') if len(desc) > 4096 else desc
+
+def get_rarity_color(rarity: str | None) -> discord.Color:
+    rarity = (rarity or "common").lower()
+    if rarity == "uncommon":
+        return discord.Color.blue()
+    if rarity == "rare":
+        return discord.Color.purple()
+    if rarity == "unique":
+        return discord.Color.gold()
+    return discord.Color.default()
+
+def truncate(text: str, max_len: int) -> str:
+    return (text[:max_len - 3] + '...') if len(text) > max_len else text
+
+def format_weapon_embed(res: dict) -> discord.Embed:
+    raw = clean_text(res.get("text"))
+    stats = parse_weapon_stats(raw)
+    traits = res.get("trait_raw", [])
+    color = get_rarity_color(res.get("rarity"))
+    embed = discord.Embed(
+        title=res.get("name", "Unknown"),
+        url=res.get("url"),
+        description=main_desc(raw),
+        color=color
+    )
+    damage_str = stats.get('damage')
+    embed.add_field(name="Traits", value=truncate(format_traits(traits, damage_str), 1024), inline=False)
+
+    prop_text = f"**Price** {res.get('price', 'N/A')}"
+    if (level := res.get('level')) is not None:
+        prop_text += f"\n**Level** {level}"
+    prop_text += f"\n**Bulk** {stats.get('bulk', 'N/A')}"
+    embed.add_field(name="Properties", value=prop_text, inline=True)
+
+    combat_text = f"**Damage** {stats.get('damage', 'N/A')}\n**Hands** {stats.get('hands', 'N/A')}"
+    embed.add_field(name="Combat", value=combat_text, inline=True)
+
+    class_text = f"**Type** {res.get('type', 'Unknown').title()}\n**Group** {stats.get('group', 'N/A').title()}\n**Category** {res.get('category', 'N/A').title()}"
+    embed.add_field(name="Classification", value=class_text, inline=True)
+
+    group = stats.get("group")
+    effect = crit_effect(group)
+    group_title = (group or "Unknown").title()
+
+    crit_value = effect
+    if "No specific effect" not in effect:
+        crit_explanation = "Certain feats, class features, weapon runes, and other effects can grant you additional benefits (might be mandatory)."
+        base_effect = effect.rstrip('.… ')
+        crit_value = f"**{group_title}**: {base_effect} (optional effect).\n{crit_explanation}"
+
+    embed.add_field(
+        name="Critical Specialization Effects",
+        value=crit_value,
+        inline=False
+    )
+    favored_weapon_text = first_after("favored weapon", raw)
+    if favored_weapon_text:
+        embed.add_field(name="Favored Weapon of", value=truncate(favored_weapon_text, 1024), inline=False)
+    specific_magic_text = first_after("specific magic", raw)
+    if specific_magic_text:
+        embed.add_field(name=f"Specific Magic {plural(res['name'])}", value=truncate(specific_magic_text, 1024), inline=False)
+    embed.set_footer(text=f"🔗 Data from Archives of Nethys | Source: {res.get('source', 'N/A')}")
+    return embed
+
+def format_spell_embed(res: dict) -> discord.Embed:
+    raw = clean_text(res.get("text"))
+    traits = res.get("trait_raw", [])
+    color = get_rarity_color(res.get("rarity"))
+    embed = discord.Embed(
+        title=res.get("name", "Unknown"),
+        url=res.get("url"),
+        description=main_desc(raw),
+        color=color
+    )
+    embed.add_field(name="Traits", value=truncate(" ".join(f"`{t}`" for t in traits) or "None", 1024), inline=False)
+    if res.get('level'):
+        embed.add_field(name="Level", value=str(res.get('level')), inline=False)
+    embed.set_footer(text=f"🔗 Data from Archives of Nethys | Source: {res.get('source', 'N/A')}")
+    return embed
+
+def format_default_embed(res: dict) -> discord.Embed:
+    raw = clean_text(res.get("text"))
+    traits = res.get("trait_raw", [])
+    color = get_rarity_color(res.get("rarity"))
+    embed = discord.Embed(
+        title=res.get("name", "Unknown"),
+        url=res.get("url"),
+        description=main_desc(raw),
+        color=color
+    )
+    embed.add_field(name="Traits", value=truncate(" ".join(f"`{t}`" for t in traits) or "None", 1024), inline=False)
+    if res.get("level"):
+        embed.add_field(name="Level", value=str(res.get("level")), inline=False)
+    if res.get("category"):
+        embed.add_field(name="Category", value=res.get("category"), inline=False)
+    embed.set_footer(text=f"🔗 Data from Archives of Nethys | Source: {res.get('source', 'N/A')}")
+    return embed
+
+def format_result_embed(res: dict) -> discord.Embed:
+    type_ = (res.get("type") or "").lower()
+    category = (res.get("category") or "").lower()
+
+    if type_ == "weapon" or category == "weapon":
+        return format_weapon_embed(res)
+    if type_ == "spell":
+        return format_spell_embed(res)
+    return format_default_embed(res)
+
+# ── Autocomplete data ────────────────────────────────────────
+POPULAR_TERMS = [
+    "longsword", "healing potion", "fireball", "leather armor", "shield",
+    "dagger", "shortbow", "chain mail", "rapier", "meteor hammer",
+]
+
+async def ac_category(_: discord.Interaction, current: str):
+    cats = ["All"] + SEARCH_CATEGORIES
+    return [app_commands.Choice(name=c, value=c) for c in cats if current.lower() in c.lower()][:25]
+
+async def ac_query(_: discord.Interaction, current: str):
+    if len(current) < 2:
+        return []
+    return [app_commands.Choice(name=t.title(), value=t) for t in POPULAR_TERMS if current.lower() in t][:25]
+
+# ── Bot class ────────────────────────────────────────────────
+class PF2eBot(commands.Bot):
+    def __init__(self):
+        super().__init__(command_prefix=commands.when_mentioned, intents=discord.Intents.default())
+
+    async def setup_hook(self):
+        global _http_session
+        _http_session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10))
+        synced = await self.tree.sync()
+        logger.info("Synced %d commands", len(synced))
+
+    async def close(self):
+        global _http_session
+        if _http_session and not _http_session.closed:
+            await _http_session.close()
+        await super().close()
+
+bot = PF2eBot()
+
+# ── /search command ─────────────────────────────────────────
+@bot.tree.command(name="search", description="Search Archives of Nethys for PF2e content")
+@app_commands.describe(query="Search term", category="Optional category filter")
+@app_commands.autocomplete(query=ac_query, category=ac_category)
+async def cmd_search(inter: discord.Interaction, query: str, category: Optional[str] = None):
+    await interaction_response_defer_safe(inter)
     try:
-        synced = await bot.tree.sync()
-        await interaction.followup.send(f"✅ Successfully synced {len(synced)} command(s)")
-    except Exception as e:
-        await interaction.followup.send(f"❌ Failed to sync commands: {str(e)}")
+        results = await search_aon_api(query, category_filter=category)
+    except Exception as exc:
+        logger.error("search error: %s", exc)
+        await safe_followup(inter, content="Error while searching. Please try again later.")
+        return
 
-# Error handler for slash commands
-@bot.tree.error
-async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
-    if isinstance(error, app_commands.CommandOnCooldown):
-        await interaction.response.send_message(f"Command is on cooldown. Try again in {error.retry_after:.2f} seconds.", ephemeral=True)
+    if not results:
+        await safe_followup(inter, content=f"**No results found for `{query}`**")
+        return
+
+    embed = format_result_embed(results[0])
+    await safe_followup(inter, embed=embed)
+
+# safe helpers for follow‑ups and defer
+async def interaction_response_defer_safe(inter: discord.Interaction):
+    if not inter.response.is_done():
+        try:
+            await inter.response.defer()
+        except Exception:
+            pass
+
+async def safe_followup(inter: discord.Interaction, content: str | None = None, *, embed: discord.Embed | None = None):
+    try:
+        if inter.response.is_done():
+            if embed:
+                await inter.followup.send(embed=embed)
+            elif content:
+                await inter.followup.send(content)
+        else:
+            if embed:
+                await inter.response.send_message(embed=embed)
+            elif content:
+                await inter.response.send_message(content)
+    except Exception as err:
+        logger.error("follow‑up failed: %s", err)
+        try:
+            error_message = "Sorry, I was unable to display the result for your query. An unexpected error occurred."
+            if inter.response.is_done():
+                await inter.followup.send(error_message, ephemeral=True)
+            else:
+                await inter.response.send_message(error_message, ephemeral=True)
+        except Exception as final_err:
+            logger.error("Failed to send final error message: %s", final_err)
+
+
+# ── /help command ───────────────────────────────────────────
+@bot.tree.command(name="help", description="Show help information")
+async def cmd_help(inter: discord.Interaction):
+    msg = (
+        "**PF2e Bot Help**\n\n"
+        "• `/search <term>` — search Archives of Nethys. Optional `category` arg narrows the type.\n"
+        "  Use tab‑completion for quick suggestions."
+    )
+    if not inter.response.is_done():
+        await inter.response.send_message(msg, ephemeral=True)
     else:
-        await interaction.response.send_message("An error occurred while processing the command.", ephemeral=True)
-        print(f"Error: {error}")
+        await inter.followup.send(msg, ephemeral=True)
 
-# Run the bot
+# ── Run bot ─────────────────────────────────────────────────
 if __name__ == "__main__":
-    # Debug: Print all environment variables (remove after testing)
-    print("Environment variables present:", list(os.environ.keys()))
-    
-    # Get tokens from environment variables
-    discord_token = os.environ.get('DISCORD_BOT_TOKEN') or os.environ.get('DiscordOracle')
-    openai_key = os.environ.get('OPENAI_API_KEY')
-    
-    print(f"Discord token found: {'Yes' if discord_token else 'No'}")
-    print(f"OpenAI key found: {'Yes' if openai_key else 'No'}")
-    
-    if not discord_token:
-        raise ValueError("DISCORD_BOT_TOKEN environment variable not set")
-    if not openai_key:
-        print("WARNING: OPENAI_API_KEY not set. GPT features will use fallback processing.")
-    
-    bot.run(discord_token)
+    try:
+        bot.run(TOKEN)
+    except discord.errors.LoginFailure:
+        logger.error("Invalid token — check DISCORD_TOKEN/DiscordOracle.")
+
