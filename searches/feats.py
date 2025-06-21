@@ -63,6 +63,11 @@ async def search_feat(feat_name):
         else:
             description = clean_html(text)
         
+        # Add link to description if available
+        aon_id = feat.get('aonId')
+        if aon_id:
+            description += f"\n\n[View on Archives of Nethys](https://2e.aonprd.com/Feats.aspx?ID={aon_id})"
+        
         # Build embed
         embed = {
             "title": f"**{feat['name']}**",

@@ -64,6 +64,11 @@ async def search_spell(spell_name):
         else:
             description = clean_html(text)
         
+        # Add link to description if available
+        aon_id = spell.get('aonId')
+        if aon_id:
+            description += f"\n\n[View on Archives of Nethys](https://2e.aonprd.com/Spells.aspx?ID={aon_id})"
+        
         # Build embed
         embed = {
             "title": f"**{spell['name']}**",

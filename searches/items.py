@@ -63,10 +63,14 @@ async def search_item(item_name):
         else:
             description = clean_html(text)
         
+        # Add link to description if available
+        aon_id = item.get('aonId')
+        if aon_id:
+            description += f"\n\n[View on Archives of Nethys](https://2e.aonprd.com/Equipment.aspx?ID={aon_id})"
+        
         # Build embed
         embed = {
             "title": f"**{item['name']}**",
-            "url": f"https://2e.aonprd.com/Equipment.aspx?ID={item.get('aonId', '')}",
             "description": description,
             "fields": []
         }

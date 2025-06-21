@@ -65,10 +65,14 @@ async def search_weapon(weapon_name):
         else:
             description = clean_html(text)
         
+        # Add link to description if available
+        aon_id = weapon.get('aonId')
+        if aon_id:
+            description += f"\n\n[View on Archives of Nethys](https://2e.aonprd.com/Weapons.aspx?ID={aon_id})"
+        
         # Build the embed
         embed = {
             "title": f"**{weapon['name']}**",
-            "url": f"https://2e.aonprd.com/Weapons.aspx?ID={weapon.get('aonId', '')}",
             "description": description,
             "fields": []
         }
