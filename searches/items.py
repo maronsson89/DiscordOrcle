@@ -1,11 +1,13 @@
 import aiohttp
 import re
 from html import unescape
+import logging
 
 async def search_item(item_name):
     """Search for an item on Archives of Nethys and return Discord embed"""
     
     url = "https://elasticsearch.aonprd.com/aon/_search"
+    timeout = aiohttp.ClientTimeout(total=10) # 10 second timeout
     
     # Try exact match first
     query = {
@@ -21,8 +23,9 @@ async def search_item(item_name):
     }
     
     try:
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.post(url, json=query) as response:
+                response.raise_for_status()
                 data = await response.json()
             
             # If no exact match, try fuzzy search
@@ -39,14 +42,15 @@ async def search_item(item_name):
                     "size": 1
                 }
                 async with session.post(url, json=query) as response:
+                    response.raise_for_status()
                     data = await response.json()
         
         hits = data.get("hits", {}).get("hits", [])
         if not hits:
             return {
                 "title": "Item Not Found",
-                "description": f"No item matching '{item_name}' found.",
-                "color": 0xFF0000
+                "description": f"No item matching '{item_name}' found on the Archives of Nethys.",
+                "color": 0xFFAD00 # Amber
             }
         
         item = hits[0]["_source"]
@@ -56,21 +60,23 @@ async def search_item(item_name):
         description = ""
         if "---" in text:
             parts = text.split("---", 1)
-            if len(parts) > 1:
-                description = clean_html(parts[1].strip())
+            # Use the part after '---' if it exists, otherwise use the part before.
+            description = clean_html(parts[1].strip() if len(parts) > 1 else parts[0].strip())
+        else:
+            description = clean_html(text)
         
         # Build embed
         embed = {
-            "title": f"{item['name']} • 🔗",
+            "title": f"**{item['name']}**",
             "url": f"https://2e.aonprd.com/Equipment.aspx?ID={item.get('aonId', '')}",
-            "description": description[:300] + "..." if len(description) > 300 else description,
+            "description": description,
             "fields": []
         }
         
         # Properties
         properties = {
             "name": "**Properties**",
-            "value": f"Price: {item.get('price', 'N/A')}\nLevel: {item.get('level', 0)}\nBulk: {item.get('bulk', 'N/A')}",
+            "value": f"**Price**: {item.get('price', 'N/A')}\n**Level**: {item.get('level', 0)}\n**Bulk**: {item.get('bulk', 'N/A')}",
             "inline": True
         }
         embed["fields"].append(properties)
@@ -78,13 +84,14 @@ async def search_item(item_name):
         # Usage
         usage = {
             "name": "**Usage**",
-            "value": f"Worn: {item.get('usage', 'N/A')}\nHands: {item.get('hands', 'N/A')}",
+            "value": f"**Worn**: {item.get('usage', 'N/A')}\n**Hands**: {item.get('hands', 'N/A')}",
             "inline": True
         }
         embed["fields"].append(usage)
         
         # Traits
-        traits = item.get("traits", {}).get("value", [])
+        traits_data = item.get("traits") or {}
+        traits = traits_data.get("value", [])
         if traits:
             trait_text = " ".join([f"`{t}`" for t in traits])
             traits_field = {
@@ -95,14 +102,23 @@ async def search_item(item_name):
             embed["fields"].append(traits_field)
         
         # Footer
-        embed["footer"] = {"text": f"Source: {item.get('source', 'Core Rulebook')}"}
+        embed["footer"] = {"text": f"Source: {item.get('source', 'N/A')}"}
+        embed["thumbnail"] = {"url": f"https://2e.aonprd.com/Images/Icons/Equipment/{item['name'].replace(' ', '')}.webp"}
         
         return embed
         
+    except aiohttp.ClientResponseError as e:
+        logging.error(f"AON API request failed: {e}")
+        return {
+            "title": "Error: Archives of Nethys API",
+            "description": f"The API request to Archives of Nethys failed with status: {e.status}",
+            "color": 0xFF0000
+        }
     except Exception as e:
+        logging.exception("An unexpected error occurred in search_item")
         return {
             "title": "Error",
-            "description": f"Failed to search item: {str(e)}",
+            "description": f"An unexpected error occurred: `{type(e).__name__}: {e}`",
             "color": 0xFF0000
         }
 
