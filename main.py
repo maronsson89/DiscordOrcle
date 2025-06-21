@@ -225,7 +225,7 @@ def format_traits(traits: List[str], base_damage_str: str | None = None) -> str:
         if lower_trait in descriptions:
             alt_type = descriptions[lower_trait]
             display_trait = f"Versatile {lower_trait.split()[-1].upper()}"
-            desc = f"**{display_trait}**: Can be used to deal {alt_type} damage"
+            desc = f"**{display_trait}:** Can be used to deal {alt_type} damage"
             if base_type and base_type != alt_type:
                 desc += f" instead of its normal {base_type} damage"
             desc += ". You choose the damage type each time you attack."
@@ -252,7 +252,7 @@ def main_desc(text: str) -> str:
     sents = [s.strip() for s in text.split(".") if len(s.strip()) > 15]
     bad_keywords = (
         "source", "favored weapon", "specific magic", "price", "bulk", "hands",
-        "damage", "category", "group", "type", "level"
+        "damage", "category", "group", "type", "level", "critical success"
     )
     keep = [s for s in sents if not any(k in s.lower() for k in bad_keywords)]
     desc = (". ".join(keep[:2]) + ".") if keep else "No description available."
@@ -285,16 +285,16 @@ def format_weapon_embed(res: dict) -> discord.Embed:
     damage_str = stats.get('damage')
     embed.add_field(name="Traits", value=truncate(format_traits(traits, damage_str), 1024), inline=False)
 
-    prop_text = f"Price {res.get('price', 'N/A')}"
+    prop_text = f"**Price** {res.get('price', 'N/A')}"
     if (level := res.get('level')) is not None:
-        prop_text += f"\nLevel {level}"
-    prop_text += f"\nBulk {stats.get('bulk', 'N/A')}"
+        prop_text += f"\n**Level** {level}"
+    prop_text += f"\n**Bulk** {stats.get('bulk', 'N/A')}"
     embed.add_field(name="Properties", value=prop_text, inline=True)
 
-    combat_text = f"Damage {stats.get('damage', 'N/A')}\nHands {stats.get('hands', 'N/A')}"
+    combat_text = f"**Damage** {stats.get('damage', 'N/A')}\n**Hands** {stats.get('hands', 'N/A')}"
     embed.add_field(name="Combat", value=combat_text, inline=True)
 
-    class_text = f"Type {res.get('type', 'Unknown').title()}\nGroup {stats.get('group', 'N/A').title()}\nCategory {res.get('category', 'N/A').title()}"
+    class_text = f"**Type** {res.get('type', 'Unknown').title()}\n**Group** {stats.get('group', 'N/A').title()}\n**Category** {res.get('category', 'N/A').title()}"
     embed.add_field(name="Classification", value=class_text, inline=True)
 
     group = stats.get("group")
@@ -305,7 +305,7 @@ def format_weapon_embed(res: dict) -> discord.Embed:
     if "No specific effect" not in effect:
         crit_explanation = "Certain feats, class features, weapon runes, and other effects can grant you additional benefits (might be mandatory)."
         base_effect = effect.rstrip('.… ')
-        crit_value = f"{group_title}: {base_effect} (optional effect).\n{crit_explanation}"
+        crit_value = f"**{group_title}**: {base_effect} (optional effect).\n{crit_explanation}"
 
     embed.add_field(
         name="Critical Specialization Effects",
@@ -318,7 +318,7 @@ def format_weapon_embed(res: dict) -> discord.Embed:
     specific_magic_text = first_after("specific magic", raw)
     if specific_magic_text:
         embed.add_field(name=f"Specific Magic {plural(res['name'])}", value=truncate(specific_magic_text, 1024), inline=False)
-    embed.set_footer(text=f"Data from Archives of Nethys | Source: {res.get('source', 'N/A')}")
+    embed.set_footer(text=f"🔗 Data from Archives of Nethys | Source: {res.get('source', 'N/A')}")
     return embed
 
 def format_spell_embed(res: dict) -> discord.Embed:
