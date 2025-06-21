@@ -388,11 +388,6 @@ class PF2eBot(commands.Bot):
     async def setup_hook(self):
         global _http_session
         _http_session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10))
-
-        # This will clear old commands. Please run the bot once with this,
-        # then stop the bot and let me know, so I can remove this code.
-        self.tree.clear_commands(guild=None)
-
         synced = await self.tree.sync()
         logger.info("Synced %d commands", len(synced))
 
