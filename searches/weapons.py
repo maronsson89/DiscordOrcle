@@ -61,6 +61,10 @@ async def search_weapon(weapon_name):
         # Assume the data is unstructured and display it directly.
         description = clean_html(weapon.get("text", "No description available."))
 
+        # Truncate description to fit within Discord's embed limits
+        if len(description) > 4000:
+            description = description[:4000] + "..."
+
         # Create a link to the Archives of Nethys page
         aon_id = weapon.get('aonId')
         if aon_id:
@@ -74,7 +78,7 @@ async def search_weapon(weapon_name):
 
         # Build a simple embed with the available data
         embed = {
-            "title": f"**{weapon.get('name', 'Unknown Weapon')}**",
+            "title": weapon.get('name', 'Unknown Weapon'),
             "description": description,
             "footer": {"text": f"Source: {weapon.get('source', 'N/A')} | Archives of Nethys"}
         }
