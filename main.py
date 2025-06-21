@@ -252,7 +252,8 @@ def main_desc(text: str) -> str:
     sents = [s.strip() for s in text.split(".") if len(s.strip()) > 15]
     bad_keywords = (
         "source", "favored weapon", "specific magic", "price", "bulk", "hands",
-        "damage", "category", "group", "type", "level", "critical success"
+        "damage", "category", "group", "type", "level", "critical success",
+        "critical specialization"
     )
     keep = [s for s in sents if not any(k in s.lower() for k in bad_keywords)]
     desc = (". ".join(keep[:2]) + ".") if keep else "No description available."
