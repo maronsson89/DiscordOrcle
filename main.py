@@ -388,6 +388,11 @@ class PF2eBot(commands.Bot):
     async def setup_hook(self):
         global _http_session
         _http_session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10))
+
+        # This will clear old commands. Please run the bot once with this,
+        # then stop the bot and let me know, so I can remove this code.
+        self.tree.clear_commands(guild=None)
+
         synced = await self.tree.sync()
         logger.info("Synced %d commands", len(synced))
 
@@ -429,24 +434,16 @@ async def interaction_response_defer_safe(inter: discord.Interaction):
 
 async def safe_followup(inter: discord.Interaction, content: str | None = None, *, embed: discord.Embed | None = None):
     try:
-        if inter.response.is_done():
-            if embed:
-                await inter.followup.send(embed=embed)
-            elif content:
-                await inter.followup.send(content)
-        else:
-            if embed:
-                await inter.response.send_message(embed=embed)
-            elif content:
-                await inter.response.send_message(content)
+        # Since we always defer in cmd_search, we should always use followup
+        if embed:
+            await inter.followup.send(embed=embed)
+        elif content:
+            await inter.followup.send(content)
     except Exception as err:
         logger.error("follow‑up failed: %s", err)
         try:
             error_message = "Sorry, I was unable to display the result for your query. An unexpected error occurred."
-            if inter.response.is_done():
-                await inter.followup.send(error_message, ephemeral=True)
-            else:
-                await inter.response.send_message(error_message, ephemeral=True)
+            await inter.followup.send(error_message, ephemeral=True)
         except Exception as final_err:
             logger.error("Failed to send final error message: %s", final_err)
 
