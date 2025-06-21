@@ -1,20 +1,11 @@
-import requests
+import aiohttp
 import re
 from html import unescape
 
-def clean_html(text):
-    """Remove HTML tags and unescape entities"""
-    # Convert <br> to newlines
-    text = text.replace("<br>", "\n").replace("<br/>", "\n").replace("<br />", "\n")
-    # Remove all other HTML tags
-    text = re.sub(r'<[^>]+>', '', text)
-    # Unescape HTML entities
-    text = unescape(text)
-    return text.strip()
-
-def search_weapon(weapon_name):
-    """Search for a weapon on Archives of Nethys and return a Discord embed dictionary"""
+async def search_weapon(weapon_name):
+    """Search for a weapon on Archives of Nethys and return Discord embed"""
     
+    # Elasticsearch query
     url = "https://elasticsearch.aonprd.com/aon/_search"
     
     # Try exact match first
@@ -31,47 +22,46 @@ def search_weapon(weapon_name):
     }
     
     try:
-        response = requests.post(url, json=query)
-        response.raise_for_status()
-        data = response.json()
-        
-        # If no exact match, try fuzzy search
-        if not data.get("hits", {}).get("hits"):
-            query = {
-                "query": {
-                    "bool": {
-                        "must": [
-                            {"term": {"category": "weapon"}},
-                            {"match": {"name": weapon_name}}
-                        ]
-                    }
-                },
-                "size": 1
-            }
-            response = requests.post(url, json=query)
-            response.raise_for_status()
-            data = response.json()
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=query) as response:
+                data = await response.json()
+            
+            # If no exact match, try fuzzy search
+            if not data.get("hits", {}).get("hits"):
+                query = {
+                    "query": {
+                        "bool": {
+                            "must": [
+                                {"term": {"category": "weapon"}},
+                                {"match": {"name": weapon_name}}
+                            ]
+                        }
+                    },
+                    "size": 1
+                }
+                async with session.post(url, json=query) as response:
+                    data = await response.json()
         
         # Check if we got results
         hits = data.get("hits", {}).get("hits", [])
         if not hits:
             return {
-                "title": "Weapon Not Found",
+                "title": "Item Not Found",
                 "description": f"No weapon matching '{weapon_name}' found.",
-                "color": 0xFF0000 # Red
+                "color": 0xFF0000
             }
         
         # Parse the weapon data
         weapon = hits[0]["_source"]
         
-        # Extract and clean description
+        # Extract and clean description (text after first ---)
         text = weapon.get("text", "")
         description = ""
         if "---" in text:
             parts = text.split("---", 1)
             if len(parts) > 1:
                 description = clean_html(parts[1].strip())
-                # Remove Critical Specialization and Favored Weapon sentences
+                # Remove critical specialization and favored weapon sentences
                 description = re.sub(r'[^.]*critical specialization[^.]*\.', '', description, flags=re.IGNORECASE)
                 description = re.sub(r'[^.]*favored weapon[^.]*\.', '', description, flags=re.IGNORECASE)
                 description = description.strip()
@@ -80,198 +70,91 @@ def search_weapon(weapon_name):
         embed = {
             "title": f"{weapon['name']} • 🔗",
             "url": f"https://2e.aonprd.com/Weapons.aspx?ID={weapon.get('aonId', '')}",
-            "description": (description[:400] + "...") if len(description) > 400 else description,
-            "fields": [],
-            "color": 0x5865F2 # Discord Blurple
+            "description": description[:200] + "..." if len(description) > 200 else description,
+            "fields": []
         }
         
         # Properties field
-        embed["fields"].append({
+        properties_field = {
             "name": "**Properties**",
             "value": f"Price: {weapon.get('price', 'N/A')}\nLevel: {weapon.get('level', 0)}\nBulk: {weapon.get('bulk', 'N/A')}",
             "inline": True
-        })
+        }
+        embed["fields"].append(properties_field)
         
         # Combat field
         damage = weapon.get("damage", "N/A")
         hands = weapon.get("hands", "N/A")
-        embed["fields"].append({
+        combat_field = {
             "name": "**Combat**",
             "value": f"Damage: {damage}\nHands: {hands}",
             "inline": True
-        })
+        }
+        embed["fields"].append(combat_field)
         
         # Classification field
-        embed["fields"].append({
+        weapon_type = weapon.get("type", "N/A")
+        weapon_group = weapon.get("group", "N/A")
+        classification_field = {
             "name": "**Classification**",
-            "value": f"Type: {weapon.get('type', 'N/A')}\nGroup: {weapon.get('group', 'N/A')}",
+            "value": f"Type: {weapon_type}\nGroup: {weapon_group}",
             "inline": True
-        })
+        }
+        embed["fields"].append(classification_field)
         
         # Traits field
         traits = weapon.get("traits", {}).get("value", [])
         trait_text = ""
         
-        # Handle Versatile trait specially
+        # Check for Versatile trait
         for trait in traits:
             if trait.startswith("versatile-"):
                 letter = trait.split("-")[1].upper()
                 damage_type_map = {"P": "piercing", "B": "bludgeoning", "S": "slashing"}
                 alt_type = damage_type_map.get(letter, "unknown")
                 
-                # Determine base damage type for context
-                base_type = "slashing" # default
-                if "piercing" in str(damage).lower():
+                # Extract base damage type from damage string
+                base_type = "slashing"  # default
+                if "piercing" in damage.lower():
                     base_type = "piercing"
-                elif "bludgeoning" in str(damage).lower():
+                elif "bludgeoning" in damage.lower():
                     base_type = "bludgeoning"
                 
-                trait_text += f"**Versatile {letter}**: Can be used to deal **{alt_type}** damage instead of its normal **{base_type}** damage.\n"
-                break # Assume only one versatile trait
+                trait_text = f"Versatile {letter} — Can be used to deal **{alt_type}** damage instead of its normal **{base_type}** damage. You choose the damage type each time you attack.\n"
+                break
         
+        # Add other traits as code blocks
         other_traits = [f"`{t}`" for t in traits if not t.startswith("versatile-")]
         if other_traits:
             trait_text += " ".join(other_traits)
         
         if trait_text:
-            embed["fields"].append({
+            traits_field = {
                 "name": "**Traits**",
                 "value": trait_text,
                 "inline": False
-            })
-            
+            }
+            embed["fields"].append(traits_field)
+        
         # Footer
-        source = weapon.get("source", "N/A")
+        source = weapon.get("source", "Core Rulebook")
         embed["footer"] = {"text": f"Source: {source}"}
         
         return embed
         
-    except requests.exceptions.RequestException as e:
-        print(f"Network error searching for weapon: {e}")
-        return {"title": "Network Error", "description": "Could not connect to Archives of Nethys.", "color": 0xFF0000}
     except Exception as e:
-        print(f"An unexpected error occurred in search_weapon: {e}")
         return {
             "title": "Error",
-            "description": f"An unexpected error occurred while searching for the weapon.",
+            "description": f"Failed to search weapon: {str(e)}",
             "color": 0xFF0000
         }
-
-File: searches/items.py
-import requests
-import re
-from html import unescape
 
 def clean_html(text):
     """Remove HTML tags and unescape entities"""
+    # Convert <br> to newlines
     text = text.replace("<br>", "\n").replace("<br/>", "\n").replace("<br />", "\n")
+    # Remove all other HTML tags
     text = re.sub(r'<[^>]+>', '', text)
+    # Unescape HTML entities
     text = unescape(text)
     return text.strip()
-
-def search_item(item_name):
-    """Search for an item on Archives of Nethys and return a Discord embed dictionary"""
-    
-    url = "https://elasticsearch.aonprd.com/aon/_search"
-    
-    # Try exact match first
-    query = {
-        "query": {
-            "bool": {
-                "must": [
-                    {"term": {"category": "equipment"}},
-                    {"term": {"name.keyword": item_name.lower()}}
-                ]
-            }
-        },
-        "size": 1
-    }
-    
-    try:
-        response = requests.post(url, json=query)
-        response.raise_for_status()
-        data = response.json()
-        
-        # If no exact match, try fuzzy search
-        if not data.get("hits", {}).get("hits"):
-            query = {
-                "query": {
-                    "bool": {
-                        "must": [
-                            {"term": {"category": "equipment"}},
-                            {"match": {"name": item_name}}
-                        ]
-                    }
-                },
-                "size": 1
-            }
-            response = requests.post(url, json=query)
-            response.raise_for_status()
-            data = response.json()
-        
-        hits = data.get("hits", {}).get("hits", [])
-        if not hits:
-            return {
-                "title": "Item Not Found",
-                "description": f"No item matching '{item_name}' found.",
-                "color": 0xFF0000 # Red
-            }
-        
-        item = hits[0]["_source"]
-        
-        # Extract description
-        text = item.get("text", "")
-        description = ""
-        if "---" in text:
-            parts = text.split("---", 1)
-            if len(parts) > 1:
-                description = clean_html(parts[1].strip())
-        
-        # Build embed
-        embed = {
-            "title": f"{item['name']} • 🔗",
-            "url": f"https://2e.aonprd.com/Equipment.aspx?ID={item.get('aonId', '')}",
-            "description": (description[:400] + "...") if len(description) > 400 else description,
-            "fields": [],
-            "color": 0x5865F2 # Discord Blurple
-        }
-        
-        # Properties
-        embed["fields"].append({
-            "name": "**Properties**",
-            "value": f"Price: {item.get('price', 'N/A')}\nLevel: {item.get('level', 0)}\nBulk: {item.get('bulk', 'N/A')}",
-            "inline": True
-        })
-        
-        # Usage
-        embed["fields"].append({
-            "name": "**Usage**",
-            "value": f"Worn: {item.get('usage', 'N/A')}\nHands: {item.get('hands', 'N/A')}",
-            "inline": True
-        })
-        
-        # Traits
-        traits = item.get("traits", {}).get("value", [])
-        if traits:
-            trait_text = " ".join([f"`{t}`" for t in traits])
-            embed["fields"].append({
-                "name": "**Traits**",
-                "value": trait_text,
-                "inline": False
-            })
-            
-        # Footer
-        embed["footer"] = {"text": f"Source: {item.get('source', 'N/A')}"}
-        
-        return embed
-        
-    except requests.exceptions.RequestException as e:
-        print(f"Network error searching for item: {e}")
-        return {"title": "Network Error", "description": "Could not connect to Archives of Nethys.", "color": 0xFF0000}
-    except Exception as e:
-        print(f"An unexpected error occurred in search_item: {e}")
-        return {
-            "title": "Error",
-            "description": f"An unexpected error occurred while searching for the item.",
-            "color": 0xFF0000
-        }
