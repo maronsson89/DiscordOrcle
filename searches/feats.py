@@ -1,16 +1,9 @@
-import requests
+import aiohttp
 import re
 from html import unescape
 
-def clean_html(text):
-    """Remove HTML tags and unescape entities"""
-    text = text.replace("<br>", "\n").replace("<br/>", "\n").replace("<br />", "\n")
-    text = re.sub(r'<[^>]+>', '', text)
-    text = unescape(text)
-    return text.strip()
-
-def search_feat(feat_name):
-    """Search for a feat on Archives of Nethys and return a Discord embed dictionary"""
+async def search_feat(feat_name):
+    """Search for a feat on Archives of Nethys and return Discord embed"""
     
     url = "https://elasticsearch.aonprd.com/aon/_search"
     
@@ -28,33 +21,32 @@ def search_feat(feat_name):
     }
     
     try:
-        response = requests.post(url, json=query)
-        response.raise_for_status()
-        data = response.json()
-        
-        # If no exact match, try fuzzy search
-        if not data.get("hits", {}).get("hits"):
-            query = {
-                "query": {
-                    "bool": {
-                        "must": [
-                            {"term": {"category": "feat"}},
-                            {"match": {"name": feat_name}}
-                        ]
-                    }
-                },
-                "size": 1
-            }
-            response = requests.post(url, json=query)
-            response.raise_for_status()
-            data = response.json()
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=query) as response:
+                data = await response.json()
+            
+            # If no exact match, try fuzzy search
+            if not data.get("hits", {}).get("hits"):
+                query = {
+                    "query": {
+                        "bool": {
+                            "must": [
+                                {"term": {"category": "feat"}},
+                                {"match": {"name": feat_name}}
+                            ]
+                        }
+                    },
+                    "size": 1
+                }
+                async with session.post(url, json=query) as response:
+                    data = await response.json()
         
         hits = data.get("hits", {}).get("hits", [])
         if not hits:
             return {
                 "title": "Feat Not Found",
                 "description": f"No feat matching '{feat_name}' found.",
-                "color": 0xFF0000 # Red
+                "color": 0xFF0000
             }
         
         feat = hits[0]["_source"]
@@ -71,49 +63,54 @@ def search_feat(feat_name):
         embed = {
             "title": f"{feat['name']} • 🔗",
             "url": f"https://2e.aonprd.com/Feats.aspx?ID={feat.get('aonId', '')}",
-            "description": (description[:400] + "...") if len(description) > 400 else description,
-            "fields": [],
-            "color": 0x5865F2 # Discord Blurple
+            "description": description[:300] + "..." if len(description) > 300 else description,
+            "fields": []
         }
         
         # Feat Details
-        embed["fields"].append({
+        details = {
             "name": "**Details**",
             "value": f"Level: {feat.get('level', 'N/A')}\nPrerequisites: {feat.get('prerequisites', 'None')}",
             "inline": True
-        })
+        }
+        embed["fields"].append(details)
         
         # Actions
         actions = feat.get("actions", "")
         if actions:
-            embed["fields"].append({
+            action_field = {
                 "name": "**Actions**",
                 "value": actions,
                 "inline": True
-            })
-            
+            }
+            embed["fields"].append(action_field)
+        
         # Traits
         traits = feat.get("traits", {}).get("value", [])
         if traits:
             trait_text = " ".join([f"`{t}`" for t in traits])
-            embed["fields"].append({
+            traits_field = {
                 "name": "**Traits**",
                 "value": trait_text,
                 "inline": False
-            })
+            }
+            embed["fields"].append(traits_field)
         
         # Footer
-        embed["footer"] = {"text": f"Source: {feat.get('source', 'N/A')}"}
+        embed["footer"] = {"text": f"Source: {feat.get('source', 'Core Rulebook')}"}
         
         return embed
-
-    except requests.exceptions.RequestException as e:
-        print(f"Network error searching for feat: {e}")
-        return {"title": "Network Error", "description": "Could not connect to Archives of Nethys.", "color": 0xFF0000}
+        
     except Exception as e:
-        print(f"An unexpected error occurred in search_feat: {e}")
         return {
             "title": "Error",
-            "description": f"An unexpected error occurred while searching for the feat.",
+            "description": f"Failed to search feat: {str(e)}",
             "color": 0xFF0000
         }
+
+def clean_html(text):
+    """Remove HTML tags and unescape entities"""
+    text = text.replace("<br>", "\n").replace("<br/>", "\n").replace("<br />", "\n")
+    text = re.sub(r'<[^>]+>', '', text)
+    text = unescape(text)
+    return text.strip()
