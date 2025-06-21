@@ -1,11 +1,13 @@
 import aiohttp
 import re
 from html import unescape
+import logging
 
 async def search_feat(feat_name):
     """Search for a feat on Archives of Nethys and return Discord embed"""
     
     url = "https://elasticsearch.aonprd.com/aon/_search"
+    timeout = aiohttp.ClientTimeout(total=10)
     
     # Try exact match first
     query = {
@@ -21,8 +23,9 @@ async def search_feat(feat_name):
     }
     
     try:
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.post(url, json=query) as response:
+                response.raise_for_status()
                 data = await response.json()
             
             # If no exact match, try fuzzy search
@@ -39,14 +42,15 @@ async def search_feat(feat_name):
                     "size": 1
                 }
                 async with session.post(url, json=query) as response:
+                    response.raise_for_status()
                     data = await response.json()
         
         hits = data.get("hits", {}).get("hits", [])
         if not hits:
             return {
                 "title": "Feat Not Found",
-                "description": f"No feat matching '{feat_name}' found.",
-                "color": 0xFF0000
+                "description": f"No feat matching '{feat_name}' found on the Archives of Nethys.",
+                "color": 0xFFAD00 # Amber
             }
         
         feat = hits[0]["_source"]
@@ -56,21 +60,22 @@ async def search_feat(feat_name):
         description = ""
         if "---" in text:
             parts = text.split("---", 1)
-            if len(parts) > 1:
-                description = clean_html(parts[1].strip())
+            description = clean_html(parts[1].strip() if len(parts) > 1 else parts[0].strip())
+        else:
+            description = clean_html(text)
         
         # Build embed
         embed = {
-            "title": f"{feat['name']} • 🔗",
+            "title": f"**{feat['name']}**",
             "url": f"https://2e.aonprd.com/Feats.aspx?ID={feat.get('aonId', '')}",
-            "description": description[:300] + "..." if len(description) > 300 else description,
+            "description": description,
             "fields": []
         }
         
         # Feat Details
         details = {
             "name": "**Details**",
-            "value": f"Level: {feat.get('level', 'N/A')}\nPrerequisites: {feat.get('prerequisites', 'None')}",
+            "value": f"**Level**: {feat.get('level', 'N/A')}\n**Prerequisites**: {feat.get('prerequisites', 'None')}",
             "inline": True
         }
         embed["fields"].append(details)
@@ -86,7 +91,8 @@ async def search_feat(feat_name):
             embed["fields"].append(action_field)
         
         # Traits
-        traits = feat.get("traits", {}).get("value", [])
+        traits_data = feat.get("traits") or {}
+        traits = traits_data.get("value", [])
         if traits:
             trait_text = " ".join([f"`{t}`" for t in traits])
             traits_field = {
@@ -96,15 +102,24 @@ async def search_feat(feat_name):
             }
             embed["fields"].append(traits_field)
         
-        # Footer
-        embed["footer"] = {"text": f"Source: {feat.get('source', 'Core Rulebook')}"}
+        # Footer & Thumbnail
+        embed["footer"] = {"text": f"Source: {feat.get('source', 'N/A')}"}
+        embed["thumbnail"] = {"url": "https://2e.aonprd.com/Images/Icons/Feat.png"}
         
         return embed
         
+    except aiohttp.ClientResponseError as e:
+        logging.error(f"AON API request failed: {e}")
+        return {
+            "title": "Error: Archives of Nethys API",
+            "description": f"The API request to Archives of Nethys failed with status: {e.status}",
+            "color": 0xFF0000
+        }
     except Exception as e:
+        logging.exception("An unexpected error occurred in search_feat")
         return {
             "title": "Error",
-            "description": f"Failed to search feat: {str(e)}",
+            "description": f"An unexpected error occurred: `{type(e).__name__}: {e}`",
             "color": 0xFF0000
         }
 
