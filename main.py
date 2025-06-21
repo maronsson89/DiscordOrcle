@@ -339,7 +339,7 @@ if __name__ == "__main__":
     print("Environment variables present:", list(os.environ.keys()))
     
     # Get tokens from environment variables
-    discord_token = os.environ.get('DISCORD_BOT_TOKEN')
+    discord_token = os.environ.get('DISCORD_BOT_TOKEN') or os.environ.get('DiscordOracle')
     openai_key = os.environ.get('OPENAI_API_KEY')
     
     print(f"Discord token found: {'Yes' if discord_token else 'No'}")
