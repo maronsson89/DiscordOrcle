@@ -2,6 +2,7 @@ import aiohttp
 import re
 from html import unescape
 import logging
+import asyncio
 
 async def search_item(item_name):
     """Search for an item on Archives of Nethys and return Discord embed"""
@@ -111,6 +112,13 @@ async def search_item(item_name):
         
         return embed
         
+    except asyncio.TimeoutError:
+        logging.warning("AON API request timed out.")
+        return {
+            "title": "Error: Request Timed Out",
+            "description": "The request to the Archives of Nethys took too long to respond. The site may be slow or down.",
+            "color": 0xFFAD00 # Amber
+        }
     except aiohttp.ClientResponseError as e:
         logging.error(f"AON API request failed: {e}")
         return {

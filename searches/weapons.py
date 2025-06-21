@@ -2,6 +2,8 @@ import aiohttp
 import re
 from html import unescape
 import logging
+import asyncio
+from urllib.parse import quote, quote_plus
 
 async def search_weapon(weapon_name):
     """Search for a weapon on Archives of Nethys and return Discord embed"""
@@ -65,10 +67,16 @@ async def search_weapon(weapon_name):
         else:
             description = clean_html(text)
         
-        # Add link to description if available
+        # Create a link to the Archives of Nethys page
         aon_id = weapon.get('aonId')
         if aon_id:
-            description += f"\n\n[View on Archives of Nethys](https://2e.aonprd.com/Weapons.aspx?ID={aon_id})"
+            link = f"https://2e.aonprd.com/Weapons.aspx?ID={aon_id}"
+        else:
+            # Fallback to a search link if no ID is present
+            encoded_name = quote_plus(weapon['name'])
+            link = f"https://2e.aonprd.com/Search.aspx?q={encoded_name}"
+        
+        description += f"\n\n[View on Archives of Nethys]({link})"
         
         # Build the embed
         embed = {
@@ -145,6 +153,13 @@ async def search_weapon(weapon_name):
         
         return embed
         
+    except asyncio.TimeoutError:
+        logging.warning("AON API request timed out.")
+        return {
+            "title": "Error: Request Timed Out",
+            "description": "The request to the Archives of Nethys took too long to respond. The site may be slow or down.",
+            "color": 0xFFAD00 # Amber
+        }
     except aiohttp.ClientResponseError as e:
         logging.error(f"AON API request failed: {e}")
         return {
