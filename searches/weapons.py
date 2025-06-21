@@ -58,6 +58,7 @@ async def search_weapon(weapon_name):
         
         # Parse the weapon data
         weapon = hits[0]["_source"]
+        print(f"AON_DATA: {weapon}")
         
         # Extract and clean description
         text = weapon.get("text", "")
