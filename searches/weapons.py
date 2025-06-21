@@ -3,7 +3,6 @@ import re
 from html import unescape
 import logging
 import asyncio
-import json
 from urllib.parse import quote, quote_plus
 
 async def search_weapon(weapon_name):
@@ -57,19 +56,32 @@ async def search_weapon(weapon_name):
                 "color": 0xFFAD00 # Amber
             }
         
-        # Parse the weapon data
         weapon = hits[0]["_source"]
-        print(f"AON_DATA: {weapon}")
-        
-        # DIAGNOSTIC STEP: Display the raw data directly in the embed
-        raw_data_string = json.dumps(weapon, indent=2)
-        description = f"Please copy this entire text block and paste it back to the assistant.\n```json\n{raw_data_string}\n```"
 
+        # Assume the data is unstructured and display it directly.
+        description = clean_html(weapon.get("text", "No description available."))
+
+        # Create a link to the Archives of Nethys page
+        aon_id = weapon.get('aonId')
+        if aon_id:
+            link = f"https://2e.aonprd.com/Weapons.aspx?ID={aon_id}"
+        else:
+            # Fallback to a search link if no ID is present
+            encoded_name = quote_plus(weapon.get('name', weapon_name))
+            link = f"https://2e.aonprd.com/Search.aspx?q={encoded_name}"
+        
+        description += f"\n\n[View on Archives of Nethys]({link})"
+
+        # Build a simple embed with the available data
         embed = {
-            "title": "DIAGNOSTIC DATA: Longsword",
+            "title": f"**{weapon.get('name', 'Unknown Weapon')}**",
             "description": description,
-            "color": 0x00FFFF # Cyan
+            "footer": {"text": f"Source: {weapon.get('source', 'N/A')} | Archives of Nethys"}
         }
+
+        sanitized_name = re.sub(r'[^a-zA-Z0-9]', '', weapon.get('name', 'Fallback'))
+        embed["thumbnail"] = {"url": f"https://2e.aonprd.com/Images/Weapons/{sanitized_name}.webp"}
+
         return embed
         
     except asyncio.TimeoutError:
