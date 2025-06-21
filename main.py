@@ -190,7 +190,7 @@ def parse_weapon_stats(text: str) -> dict[str, str]:
 
 # Critical specialisation effects (abbreviated)
 CRIT_EFFECTS = {
-    "sword": "The target is made **off-guard** until the start of your next turn.",
+    "sword": "Target is **flat-footed** until the start of your next turn.",
     "axe": "Swipe an adjacent creature …",
     "bow": "Pin the target; it becomes **immobilised** (DC 10 Athletics to escape).",
     "club": "Knock the target 10 ft away.",
@@ -294,21 +294,20 @@ def format_weapon_embed(res: dict) -> discord.Embed:
     combat_text = f"**Damage** {stats.get('damage', 'N/A')}\n**Hands** {stats.get('hands', 'N/A')}"
     embed.add_field(name="Combat", value=combat_text, inline=True)
 
-    class_text = f"**Type** {res.get('type', 'Unknown').title()}\n**Group** {stats.get('group', 'N/A').title()}\n**Category** {res.get('category', 'N/A').title()}"
+    class_text = f"**Group** {stats.get('group', 'N/A').title()}\n**Category** {res.get('category', 'N/A').title()}"
     embed.add_field(name="Classification", value=class_text, inline=True)
 
     group = stats.get("group")
     effect = crit_effect(group)
-    group_title = (group or "Unknown").title()
 
     crit_value = effect
     if "No specific effect" not in effect:
-        crit_explanation = "Certain feats, class features, weapon runes, and other effects can grant you additional benefits (might be mandatory)."
-        base_effect = effect.rstrip('.… ')
-        crit_value = f"**{group_title}**: {base_effect} (optional effect).\n{crit_explanation}"
+        crit_explanation = "Certain feats, class features, and other effects can grant additional benefits on a critical success."
+        crit_value = f"{crit_explanation}\n\n{effect}"
 
+    group_title = (group or "Unknown").title()
     embed.add_field(
-        name="Critical Specialization Effects",
+        name=f"Critical Specialization ({group_title} Group)",
         value=crit_value,
         inline=False
     )
