@@ -241,22 +241,36 @@ def plural(word: str) -> str:
     return word if word.endswith("s") else word + "s"
 
 
-def first_after(label: str, text: str) -> Optional[str]:
-    pat = re.compile(fr"{label}[^.\n]*?([A-Z][^.\n]+)", re.I)
-    if (m := pat.search(text)):
-        return WS_RE.sub(" ", m.group(1).strip())
-    return None
+def parse_aon_text_into_sections(text: str) -> dict[str, str]:
+    """
+    Parses a raw text block from AoN into a dictionary of logical sections.
+    This is the core of the new, robust parsing system.
+    """
+    sections = {}
+    
+    boundary_keywords = [
+        "Source", "Price", "Level", "Bulk", "Hands", "Damage", "Category", "Group", "Type", 
+        "Access", "Trigger", "Requirements", "Favored Weapon", "Specific Magic",
+        "Critical Specialization", "Critical Success", "Cast", "Traditions", "Activation"
+    ]
+    pattern = re.compile(r"\s*(?:---|\b(" + "|".join(boundary_keywords) + r"):)\s*", re.I)
+    
+    tokens = pattern.split(text)
+    if not tokens:
+        return sections
 
+    sections['description'] = tokens[0].strip()
+    
+    i = 1
+    while i < len(tokens):
+        keyword = tokens[i]
+        value = tokens[i+1].strip() if (i+1) < len(tokens) else ""
+        if keyword:
+            sections[keyword.lower().replace(" ", "_")] = value
+        i += 2
+        
+    return sections
 
-def main_desc(text: str) -> str:
-    sents = [s.strip() for s in text.split(".") if len(s.strip()) > 15]
-    bad_keywords = (
-        "source", "favored weapon", "specific magic", "price", "bulk", "hands",
-        "damage", "category", "group", "type", "level", "critical success"
-    )
-    keep = [s for s in sents if not any(k in s.lower() for k in bad_keywords)]
-    desc = (". ".join(keep[:2]) + ".") if keep else "No description available."
-    return (desc[:4093] + '...') if len(desc) > 4096 else desc
 
 def get_rarity_color(rarity: str | None) -> discord.Color:
     rarity = (rarity or "common").lower()
@@ -271,21 +285,46 @@ def get_rarity_color(rarity: str | None) -> discord.Color:
 def truncate(text: str, max_len: int) -> str:
     return (text[:max_len - 3] + '...') if len(text) > max_len else text
 
+def format_price(price_cp: int) -> str:
+    if not price_cp:
+        return "N/A"
+    gp = price_cp // 100
+    sp = (price_cp % 100) // 10
+    cp = price_cp % 10
+    parts = []
+    if gp:
+        parts.append(f"{gp} gp")
+    if sp:
+        parts.append(f"{sp} sp")
+    if cp:
+        parts.append(f"{cp} cp")
+    return " ".join(parts) or "0 cp"
+
 def format_weapon_embed(res: dict) -> discord.Embed:
-    raw = clean_text(res.get("text"))
-    stats = parse_weapon_stats(raw)
+    raw_text = clean_text(res.get("text", ""))
+    sections = parse_aon_text_into_sections(raw_text)
+
+    stats = parse_weapon_stats(raw_text)
     traits = res.get("trait_raw", [])
     color = get_rarity_color(res.get("rarity"))
+
     embed = discord.Embed(
         title=res.get("name", "Unknown"),
         url=res.get("url"),
-        description=main_desc(raw),
+        description=sections.get('description', "No description available."),
         color=color
     )
     damage_str = stats.get('damage')
     embed.add_field(name="Traits", value=truncate(format_traits(traits, damage_str), 1024), inline=False)
 
-    prop_text = f"**Price** {res.get('price', 'N/A')}"
+    price_val = "N/A"
+    if (price_raw := res.get("price")) is not None:
+        try:
+            price_val = format_price(int(price_raw))
+        except (ValueError, TypeError):
+            price_val = str(price_raw)
+
+    prop_text = f"**Price** {price_val}"
     if (level := res.get('level')) is not None:
         prop_text += f"\n**Level** {level}"
     prop_text += f"\n**Bulk** {stats.get('bulk', 'N/A')}"
@@ -297,54 +336,62 @@ def format_weapon_embed(res: dict) -> discord.Embed:
     class_text = f"**Type** {res.get('type', 'Unknown').title()}\n**Group** {stats.get('group', 'N/A').title()}\n**Category** {res.get('category', 'N/A').title()}"
     embed.add_field(name="Classification", value=class_text, inline=True)
 
-    group = stats.get("group")
-    effect = crit_effect(group)
-    group_title = (group or "Unknown").title()
-
-    crit_value = effect
-    if "No specific effect" not in effect:
-        crit_explanation = "Certain feats, class features, weapon runes, and other effects can grant you additional benefits (might be mandatory)."
-        base_effect = effect.rstrip('.… ')
-        crit_value = f"**{group_title}**: {base_effect} (optional effect).\n{crit_explanation}"
-
-    embed.add_field(
-        name="Critical Specialization Effects",
-        value=crit_value,
-        inline=False
-    )
-    favored_weapon_text = first_after("favored weapon", raw)
-    if favored_weapon_text:
+    if (crit_spec_text := sections.get("critical_specialization")):
+         embed.add_field(
+            name="Critical Specialization",
+            value=crit_spec_text,
+            inline=False
+        )
+    
+    if (favored_weapon_text := sections.get("favored_weapon")):
         embed.add_field(name="Favored Weapon of", value=truncate(favored_weapon_text, 1024), inline=False)
-    specific_magic_text = first_after("specific magic", raw)
-    if specific_magic_text:
+        
+    if (specific_magic_text := sections.get("specific_magic")):
         embed.add_field(name=f"Specific Magic {plural(res['name'])}", value=truncate(specific_magic_text, 1024), inline=False)
-    embed.set_footer(text=f"🔗 Data from Archives of Nethys | Source: {res.get('source', 'N/A')}")
+
+    source_text = "N/A"
+    if (source_raw := res.get("source")):
+        source_text = ", ".join(source_raw) if isinstance(source_raw, list) else str(source_raw)
+
+    embed.set_footer(text=f"🔗 Data from Archives of Nethys | Source: {source_text}")
     return embed
 
 def format_spell_embed(res: dict) -> discord.Embed:
-    raw = clean_text(res.get("text"))
+    raw_text = clean_text(res.get("text", ""))
+    sections = parse_aon_text_into_sections(raw_text)
     traits = res.get("trait_raw", [])
     color = get_rarity_color(res.get("rarity"))
     embed = discord.Embed(
         title=res.get("name", "Unknown"),
         url=res.get("url"),
-        description=main_desc(raw),
+        description=sections.get('description', 'No description available.'),
         color=color
     )
     embed.add_field(name="Traits", value=truncate(" ".join(f"`{t}`" for t in traits) or "None", 1024), inline=False)
+    
     if res.get('level'):
         embed.add_field(name="Level", value=str(res.get('level')), inline=False)
-    embed.set_footer(text=f"🔗 Data from Archives of Nethys | Source: {res.get('source', 'N/A')}")
+    
+    for section_name in ["cast", "trigger", "requirements", "traditions", "activation"]:
+        if section_text := sections.get(section_name):
+            embed.add_field(name=section_name.title(), value=section_text, inline=False)
+            
+    source_text = "N/A"
+    if (source_raw := res.get("source")):
+        source_text = ", ".join(source_raw) if isinstance(source_raw, list) else str(source_raw)
+
+    embed.set_footer(text=f"🔗 Data from Archives of Nethys | Source: {source_text}")
     return embed
 
 def format_default_embed(res: dict) -> discord.Embed:
-    raw = clean_text(res.get("text"))
+    raw_text = clean_text(res.get("text", ""))
+    sections = parse_aon_text_into_sections(raw_text)
     traits = res.get("trait_raw", [])
     color = get_rarity_color(res.get("rarity"))
     embed = discord.Embed(
         title=res.get("name", "Unknown"),
         url=res.get("url"),
-        description=main_desc(raw),
+        description=sections.get('description', 'No description available.'),
         color=color
     )
     embed.add_field(name="Traits", value=truncate(" ".join(f"`{t}`" for t in traits) or "None", 1024), inline=False)
@@ -352,7 +399,12 @@ def format_default_embed(res: dict) -> discord.Embed:
         embed.add_field(name="Level", value=str(res.get("level")), inline=False)
     if res.get("category"):
         embed.add_field(name="Category", value=res.get("category"), inline=False)
-    embed.set_footer(text=f"🔗 Data from Archives of Nethys | Source: {res.get('source', 'N/A')}")
+    
+    source_text = "N/A"
+    if (source_raw := res.get("source")):
+        source_text = ", ".join(source_raw) if isinstance(source_raw, list) else str(source_raw)
+        
+    embed.set_footer(text=f"🔗 Data from Archives of Nethys | Source: {source_text}")
     return embed
 
 def format_result_embed(res: dict) -> discord.Embed:
