@@ -55,4 +55,4 @@ async def feat_command(interaction: discord.Interaction, feat_name: str):
     await interaction.followup.send(embed=embed)
 
 # Run bot
-bot.run(os.getenv('DISCORDORACLE'))
+bot.run(os.getenv('DiscordOracle'))
