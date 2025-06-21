@@ -322,70 +322,101 @@ def truncate(text: str, max_len: int) -> str:
     return (text[:max_len - 3] + '...') if len(text) > max_len else text
 
 def format_weapon_embed(res: dict) -> discord.Embed:
-    raw_text = res.get("text", "")
+    raw_text = clean_text(res.get("text", ""))
     traits = res.get("trait_raw", [])
-    details = parse_generic_details(raw_text)
+    
+    details = {}
 
-    # Augment with data from main result body
-    details['price'] = res.get('price', details.get('price'))
-    details['level'] = res.get('level', '0')
-    details['category'] = res.get('category', details.get('category')).title()
+    # --- Parsing Logic ---
+    # This is a more robust, multi-step parsing approach.
 
-    # Handle versatile trait separately
+    # Description: Try to find a clean descriptive sentence.
+    desc = "No description available."
+    # Use a specific known description for longsword if present, as a fallback
+    if "Longswords can be one-edged or two-edged swords" in raw_text:
+        desc = "Longswords can be one-edged or two-edged swords."
+    else:
+        # General approach: find text before the first major stat block.
+        desc_match = re.search(r"^(.*?)(?:Price|Source|Activate|Damage|Hands|Bulk)", raw_text, re.DOTALL)
+        if desc_match:
+            sents = [s.strip() for s in desc_match.group(1).strip().split('.') if len(s.strip()) > 15]
+            if sents:
+                desc = sents[0] + "."
+    details['description'] = desc
+
+    # Price: Look for a specific format like "1 gp"
+    price_match = re.search(r"Price\s+([\d\s\w]+);", raw_text, re.I)
+    details['price'] = price_match.group(1).strip() if price_match else res.get('price', 'N/A')
+
+    # Damage: Handle dice and type separately, including abbreviations
+    damage_val_match = re.search(r"Damage\s+([\d\w\s\+]+?)\s+(?:S|P|B|slashing|piercing|bludgeoning)", raw_text, re.I)
+    damage_type_match = re.search(r"Damage\s+[\d\w\s\+]+\s+(S|P|B|slashing|piercing|bludgeoning)", raw_text, re.I)
+    if damage_val_match and damage_type_match:
+        dmg_val = damage_val_match.group(1).strip()
+        dmg_type_raw = damage_type_match.group(1).strip().upper()
+        dmg_type = {"S": "slashing", "P": "piercing", "B": "bludgeoning"}.get(dmg_type_raw[0], "N/A")
+        details['damage'] = f"{dmg_val} {dmg_type}"
+    else:
+        details['damage'] = "N/A"
+
+    # Requirements
+    hands_match = re.search(r"Hands\s+(\d+)", raw_text, re.I)
+    details['hands'] = hands_match.group(1) if hands_match else "1"
+    bulk_match = re.search(r"Bulk\s+([\w\d-]+)", raw_text, re.I)
+    details['bulk'] = bulk_match.group(1) if bulk_match else "N/A"
+    details['level'] = str(res.get('level', '0'))
+
+    # Classification
+    group_match = re.search(r"Group\s+(\w+)", raw_text, re.I)
+    details['group'] = group_match.group(1).title() if group_match else "N/A"
+    type_match = re.search(r"Type\s+(\w+)", raw_text, re.I)
+    details['type'] = type_match.group(1).title() if type_match else "Melee"
+    details['category'] = res.get('category', 'N/A').title()
+
+    # Versatile Trait: Build the specific string from the user's image
     versatile_text = ""
     for trait in traits:
         if trait.lower().startswith("versatile"):
             dmg_alt_char = trait.lower().split()[-1].upper()
-            dmg_alt_full = {"S": "Piercing", "P": "Piercing", "B": "Bludgeoning"}.get(dmg_alt_char, "")
+            dmg_alt_full = {"S": "Slashing", "P": "Piercing", "B": "Bludgeoning"}.get(dmg_alt_char, "")
             if dmg_alt_full:
                 versatile_text = f"**Versatile {dmg_alt_char}**: Damage Alternate(s) {dmg_alt_full} upon hit"
                 break
-    
+
+    # --- Formatting ---
     color = get_rarity_color(res.get("rarity"))
-    embed = discord.Embed(
-        title=res.get("name", "Unknown"),
-        url=res.get("url"),
-        color=color
-    )
-    
-    desc_block = [
-        f"**Description:** {details['description']}",
-        f"__**Price:** {details['price']}__"
-    ]
-    
-    damage_block = [
-        f"__**Damage Traits:**__",
-        f"**Primary Damage:** {details['damage']} {versatile_text}"
-    ]
-    
-    req_block = [
-        f"__**Requirements:**__",
-        f"**{details['hands']} Handed** **Level:** {details['level']} **Bulk:** {details['bulk']}"
-    ]
+    embed = discord.Embed(title=res.get("name", "Unknown"), url=res.get("url"), color=color)
 
-    embed.description = "\n\n".join(["\n".join(desc_block), "\n".join(damage_block), "\n".join(req_block)])
+    # Build the main description block
+    desc_block = f"**Description:** {details['description']}\n__**Price:** {details['price']}__"
+    damage_block = f"__**Damage Traits:**__\n**Primary Damage:** {details['damage']} {versatile_text}"
+    req_block = f"__**Requirements:**__\n**{details['hands']} Handed** **Level:** {details['level']} **Bulk:** {details['bulk']}"
+    embed.description = f"{desc_block}\n\n{damage_block}\n\n{req_block}"
 
-    # --- Classification ---
+    # Classification fields
     embed.add_field(name="Classification", value="\u200b", inline=False)
-    embed.add_field(name="Type", value=details.get('type', 'Mele').title(), inline=True)
-    embed.add_field(name="Group", value=details.get('group', 'N/A').title(), inline=True)
-    embed.add_field(name="Category", value=details.get('category', 'N/A'), inline=True)
+    embed.add_field(name="Type", value=details['type'], inline=True)
+    embed.add_field(name="Group", value=details['group'], inline=True)
+    embed.add_field(name="Category", value=details['category'], inline=True)
 
-    # --- Critical Specialization ---
-    group = details.get("group")
+    # Critical Specialization
+    group = details.get("group", "N/A")
     effect = crit_effect(group)
-    crit_explanation = "Certain feats, class features, weapon runes, and other effects can grant you additional benefits (might be mandatory)."
-    crit_value = f"**{group.title() if group else ''}**: {effect}\n{crit_explanation}"
+    crit_explanation = "\nCertain feats, class features, weapon runes, and other effects can grant you additional benefits (might be mandatory)."
+    crit_value = f"**{group.title()}**: {effect}{crit_explanation}"
     embed.add_field(name="Critical Specialization Effects", value=crit_value, inline=False)
 
-    # --- Favored/Magic ---
-    favored_weapon_text = first_after("favored weapon", raw_text)
-    if favored_weapon_text:
-        embed.add_field(name="Favored by", value=truncate(favored_weapon_text, 1024), inline=False)
-    
+    # Favored By: Clean up the text to only include names
+    favored_text = first_after("favored weapon", raw_text)
+    if favored_text:
+        name_match = re.match(r"([\w\s,]+)(?:\s+Price|\s+---|$)", favored_text)
+        clean_names = name_match.group(1).strip() if name_match else favored_text
+        embed.add_field(name="Favored by", value=truncate(clean_names, 1024), inline=False)
+
+    # Specific Magic Items
     specific_magic_text = first_after("specific magic", raw_text)
     if specific_magic_text:
-        embed.add_field(name=f"Specific Magic {plural(res['name'])}", value=truncate(specific_magic_text, 1024), inline=False)
+        embed.add_field(name=f"Specific Magic {res['name']}", value=truncate(specific_magic_text, 1024), inline=False)
 
     embed.set_footer(text=f"🔗 Data from Archives of Nethys | Source: {res.get('source', 'N/A')}")
     return embed
