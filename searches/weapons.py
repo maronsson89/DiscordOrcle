@@ -3,6 +3,7 @@ import re
 from html import unescape
 import logging
 import asyncio
+import json
 from urllib.parse import quote, quote_plus
 
 async def search_weapon(weapon_name):
@@ -60,98 +61,15 @@ async def search_weapon(weapon_name):
         weapon = hits[0]["_source"]
         print(f"AON_DATA: {weapon}")
         
-        # Extract and clean description
-        text = weapon.get("text", "")
-        description = ""
-        if "---" in text:
-            description = clean_html(text.split("---", 1)[0].strip())
-        else:
-            description = clean_html(text)
-        
-        # Create a link to the Archives of Nethys page
-        aon_id = weapon.get('aonId')
-        if aon_id:
-            link = f"https://2e.aonprd.com/Weapons.aspx?ID={aon_id}"
-        else:
-            # Fallback to a search link if no ID is present
-            encoded_name = quote_plus(weapon['name'])
-            link = f"https://2e.aonprd.com/Search.aspx?q={encoded_name}"
-        
-        description += f"\n\n[View on Archives of Nethys]({link})"
-        
-        # Build the embed
+        # DIAGNOSTIC STEP: Display the raw data directly in the embed
+        raw_data_string = json.dumps(weapon, indent=2)
+        description = f"Please copy this entire text block and paste it back to the assistant.\n```json\n{raw_data_string}\n```"
+
         embed = {
-            "title": f"**{weapon['name']}**",
+            "title": "DIAGNOSTIC DATA: Longsword",
             "description": description,
-            "fields": []
+            "color": 0x00FFFF # Cyan
         }
-        
-        # Properties field
-        properties_field = {
-            "name": "**Properties**",
-            "value": f"**Price**: {weapon.get('price', 'N/A')}\n**Level**: {weapon.get('level', 0)}\n**Bulk**: {weapon.get('bulk', 'N/A')}",
-            "inline": True
-        }
-        embed["fields"].append(properties_field)
-        
-        # Combat field
-        damage = weapon.get("damage", "N/A")
-        hands = weapon.get("hands", "N/A")
-        combat_field = {
-            "name": "**Combat**",
-            "value": f"**Damage**: {damage}\n**Hands**: {hands}",
-            "inline": True
-        }
-        embed["fields"].append(combat_field)
-        
-        # Classification field
-        weapon_type = weapon.get("type", "N/A")
-        weapon_group = weapon.get("group", "N/A")
-        classification_field = {
-            "name": "**Classification**",
-            "value": f"**Type**: {weapon_type}\n**Group**: {weapon_group}",
-            "inline": True
-        }
-        embed["fields"].append(classification_field)
-        
-        # Traits field
-        traits_data = weapon.get("traits") or {}
-        traits = traits_data.get("value", [])
-        trait_text = ""
-        
-        if traits:
-            # Check for Versatile trait
-            for trait in traits:
-                if trait.startswith("versatile-"):
-                    letter = trait.split("-")[1].upper()
-                    damage_type_map = {"P": "piercing", "B": "bludgeoning", "S": "slashing"}
-                    alt_type = damage_type_map.get(letter, "unknown")
-                    
-                    base_type = "slashing"
-                    if "piercing" in damage.lower(): base_type = "piercing"
-                    elif "bludgeoning" in damage.lower(): base_type = "bludgeoning"
-                    
-                    trait_text += f"**Versatile {letter}** — Can be used to deal **{alt_type}** damage instead of **{base_type}**.\n"
-                    break
-            
-            other_traits = " ".join([f"`{t}`" for t in traits if not t.startswith("versatile-")])
-            if other_traits:
-                trait_text += other_traits
-        
-        if trait_text:
-            traits_field = {
-                "name": "**Traits**",
-                "value": trait_text,
-                "inline": False
-            }
-            embed["fields"].append(traits_field)
-        
-        # Footer & Thumbnail
-        source_book = weapon.get('source', 'N/A')
-        embed["footer"] = {"text": f"Source: {source_book} | Archives of Nethys"}
-        sanitized_name = re.sub(r'[^a-zA-Z0-9]', '', weapon.get('name', 'Fallback'))
-        embed["thumbnail"] = {"url": f"https://2e.aonprd.com/Images/Weapons/{sanitized_name}.webp"}
-        
         return embed
         
     except asyncio.TimeoutError:
