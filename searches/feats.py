@@ -59,8 +59,7 @@ async def search_feat(feat_name):
         text = feat.get("text", "")
         description = ""
         if "---" in text:
-            parts = text.split("---", 1)
-            description = clean_html(parts[1].strip() if len(parts) > 1 else parts[0].strip())
+            description = clean_html(text.split("---", 1)[0].strip())
         else:
             description = clean_html(text)
         
@@ -103,7 +102,8 @@ async def search_feat(feat_name):
             embed["fields"].append(traits_field)
         
         # Footer & Thumbnail
-        embed["footer"] = {"text": f"Source: {feat.get('source', 'N/A')}"}
+        source_book = feat.get('source', 'N/A')
+        embed["footer"] = {"text": f"Source: {source_book} | Archives of Nethys"}
         embed["thumbnail"] = {"url": "https://2e.aonprd.com/Images/Icons/Feat.png"}
         
         return embed

@@ -2,6 +2,7 @@ import aiohttp
 import re
 from html import unescape
 import logging
+from urllib.parse import quote
 
 async def search_spell(spell_name):
     """Search for a spell on Archives of Nethys and return Discord embed"""
@@ -59,8 +60,7 @@ async def search_spell(spell_name):
         text = spell.get("text", "")
         description = ""
         if "---" in text:
-            parts = text.split("---", 1)
-            description = clean_html(parts[1].strip() if len(parts) > 1 else parts[0].strip())
+            description = clean_html(text.split("---", 1)[0].strip())
         else:
             description = clean_html(text)
         
@@ -113,8 +113,9 @@ async def search_spell(spell_name):
             embed["fields"].append(traits_field)
         
         # Footer & Thumbnail
-        embed["footer"] = {"text": f"Source: {spell.get('source', 'N/A')}"}
-        embed["thumbnail"] = {"url": f"https://2e.aonprd.com/Images/Spells/{spell['name'].replace(' ', '%20')}.webp"}
+        source_book = spell.get('source', 'N/A')
+        embed["footer"] = {"text": f"Source: {source_book} | Archives of Nethys"}
+        embed["thumbnail"] = {"url": f"https://2e.aonprd.com/Images/Spells/{quote(spell['name'])}.webp"}
         
         return embed
         

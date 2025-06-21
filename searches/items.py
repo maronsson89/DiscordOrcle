@@ -59,9 +59,7 @@ async def search_item(item_name):
         text = item.get("text", "")
         description = ""
         if "---" in text:
-            parts = text.split("---", 1)
-            # Use the part after '---' if it exists, otherwise use the part before.
-            description = clean_html(parts[1].strip() if len(parts) > 1 else parts[0].strip())
+            description = clean_html(text.split("---", 1)[0].strip())
         else:
             description = clean_html(text)
         
@@ -102,8 +100,10 @@ async def search_item(item_name):
             embed["fields"].append(traits_field)
         
         # Footer
-        embed["footer"] = {"text": f"Source: {item.get('source', 'N/A')}"}
-        embed["thumbnail"] = {"url": f"https://2e.aonprd.com/Images/Icons/Equipment/{item['name'].replace(' ', '')}.webp"}
+        source_book = item.get('source', 'N/A')
+        embed["footer"] = {"text": f"Source: {source_book} | Archives of Nethys"}
+        sanitized_name = re.sub(r'[^a-zA-Z0-9]', '', item['name'])
+        embed["thumbnail"] = {"url": f"https://2e.aonprd.com/Images/Equipment/{sanitized_name}.webp"}
         
         return embed
         

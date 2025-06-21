@@ -61,11 +61,9 @@ async def search_weapon(weapon_name):
         text = weapon.get("text", "")
         description = ""
         if "---" in text:
-            parts = text.split("---", 1)
-            description = clean_html(parts[1].strip() if len(parts) > 1 else parts[0].strip())
-            # Remove redundant critical specialization and favored weapon sentences
-            description = re.sub(r'[^.]*critical specialization[^.]*\.', '', description, flags=re.IGNORECASE).strip()
-            description = re.sub(r'[^.]*favored weapon[^.]*\.', '', description, flags=re.IGNORECASE).strip()
+            description = clean_html(text.split("---", 1)[0].strip())
+        else:
+            description = clean_html(text)
         
         # Build the embed
         embed = {
@@ -136,8 +134,10 @@ async def search_weapon(weapon_name):
             embed["fields"].append(traits_field)
         
         # Footer & Thumbnail
-        embed["footer"] = {"text": f"Source: {weapon.get('source', 'N/A')}"}
-        embed["thumbnail"] = {"url": f"https://2e.aonprd.com/Images/Weapons/{weapon.get('name', 'Fallback').replace(' ', '')}.webp"}
+        source_book = weapon.get('source', 'N/A')
+        embed["footer"] = {"text": f"Source: {source_book} | Archives of Nethys"}
+        sanitized_name = re.sub(r'[^a-zA-Z0-9]', '', weapon.get('name', 'Fallback'))
+        embed["thumbnail"] = {"url": f"https://2e.aonprd.com/Images/Weapons/{sanitized_name}.webp"}
         
         return embed
         
