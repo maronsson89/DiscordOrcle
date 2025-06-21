@@ -1,16 +1,9 @@
-import requests
+import aiohttp
 import re
 from html import unescape
 
-def clean_html(text):
-    """Remove HTML tags and unescape entities"""
-    text = text.replace("<br>", "\n").replace("<br/>", "\n").replace("<br />", "\n")
-    text = re.sub(r'<[^>]+>', '', text)
-    text = unescape(text)
-    return text.strip()
-
-def search_spell(spell_name):
-    """Search for a spell on Archives of Nethys and return a Discord embed dictionary"""
+async def search_spell(spell_name):
+    """Search for a spell on Archives of Nethys and return Discord embed"""
     
     url = "https://elasticsearch.aonprd.com/aon/_search"
     
@@ -28,33 +21,32 @@ def search_spell(spell_name):
     }
     
     try:
-        response = requests.post(url, json=query)
-        response.raise_for_status()
-        data = response.json()
-        
-        # If no exact match, try fuzzy search
-        if not data.get("hits", {}).get("hits"):
-            query = {
-                "query": {
-                    "bool": {
-                        "must": [
-                            {"term": {"category": "spell"}},
-                            {"match": {"name": spell_name}}
-                        ]
-                    }
-                },
-                "size": 1
-            }
-            response = requests.post(url, json=query)
-            response.raise_for_status()
-            data = response.json()
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=query) as response:
+                data = await response.json()
             
+            # If no exact match, try fuzzy search
+            if not data.get("hits", {}).get("hits"):
+                query = {
+                    "query": {
+                        "bool": {
+                            "must": [
+                                {"term": {"category": "spell"}},
+                                {"match": {"name": spell_name}}
+                            ]
+                        }
+                    },
+                    "size": 1
+                }
+                async with session.post(url, json=query) as response:
+                    data = await response.json()
+        
         hits = data.get("hits", {}).get("hits", [])
         if not hits:
             return {
                 "title": "Spell Not Found",
                 "description": f"No spell matching '{spell_name}' found.",
-                "color": 0xFF0000 # Red
+                "color": 0xFF0000
             }
         
         spell = hits[0]["_source"]
@@ -71,58 +63,64 @@ def search_spell(spell_name):
         embed = {
             "title": f"{spell['name']} • 🔗",
             "url": f"https://2e.aonprd.com/Spells.aspx?ID={spell.get('aonId', '')}",
-            "description": (description[:400] + "...") if len(description) > 400 else description,
-            "fields": [],
-            "color": 0x5865F2 # Discord Blurple
+            "description": description[:300] + "..." if len(description) > 300 else description,
+            "fields": []
         }
         
         # Spell Details
-        embed["fields"].append({
+        details = {
             "name": "**Spell Details**",
             "value": f"Level: {spell.get('level', 'N/A')}\nCast: {spell.get('cast', 'N/A')}\nRange: {spell.get('range', 'N/A')}",
             "inline": True
-        })
+        }
+        embed["fields"].append(details)
         
         # Traditions
         traditions = spell.get("traditions", [])
         if traditions:
-            embed["fields"].append({
+            trad_field = {
                 "name": "**Traditions**",
-                "value": ", ".join(traditions).title(),
+                "value": ", ".join(traditions),
                 "inline": True
-            })
-            
+            }
+            embed["fields"].append(trad_field)
+        
         # Components
         components = spell.get("components", [])
         if components:
-             embed["fields"].append({
+            comp_field = {
                 "name": "**Components**",
-                "value": ", ".join(components).title(),
+                "value": ", ".join(components),
                 "inline": True
-            })
-
+            }
+            embed["fields"].append(comp_field)
+        
         # Traits
         traits = spell.get("traits", {}).get("value", [])
         if traits:
             trait_text = " ".join([f"`{t}`" for t in traits])
-            embed["fields"].append({
+            traits_field = {
                 "name": "**Traits**",
                 "value": trait_text,
                 "inline": False
-            })
-            
+            }
+            embed["fields"].append(traits_field)
+        
         # Footer
-        embed["footer"] = {"text": f"Source: {spell.get('source', 'N/A')}"}
+        embed["footer"] = {"text": f"Source: {spell.get('source', 'Core Rulebook')}"}
         
         return embed
-
-    except requests.exceptions.RequestException as e:
-        print(f"Network error searching for spell: {e}")
-        return {"title": "Network Error", "description": "Could not connect to Archives of Nethys.", "color": 0xFF0000}
+        
     except Exception as e:
-        print(f"An unexpected error occurred in search_spell: {e}")
         return {
             "title": "Error",
-            "description": f"An unexpected error occurred while searching for the spell.",
+            "description": f"Failed to search spell: {str(e)}",
             "color": 0xFF0000
         }
+
+def clean_html(text):
+    """Remove HTML tags and unescape entities"""
+    text = text.replace("<br>", "\n").replace("<br/>", "\n").replace("<br />", "\n")
+    text = re.sub(r'<[^>]+>', '', text)
+    text = unescape(text)
+    return text.strip()
