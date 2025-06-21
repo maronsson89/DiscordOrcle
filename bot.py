@@ -13,6 +13,7 @@ intents.message_content = True
 class MyBot(discord.Client):
     def __init__(self):
         super().__init__(intents=intents)
+        self.tree = app_commands.CommandTree(self)
         
     async def on_ready(self):
         print(f'{self.user} has connected to Discord!')
