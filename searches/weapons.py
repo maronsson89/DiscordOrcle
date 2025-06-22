@@ -3,6 +3,7 @@ import re
 from html import unescape
 import logging
 import asyncio
+import json
 from urllib.parse import quote, quote_plus
 
 async def search_weapon(weapon_name):
@@ -57,35 +58,18 @@ async def search_weapon(weapon_name):
             }
         
         weapon = hits[0]["_source"]
-
-        # Assume the data is unstructured and display it directly.
-        description = clean_html(weapon.get("text", "No description available."))
-
-        # Truncate description to fit within Discord's embed limits
-        if len(description) > 4000:
-            description = description[:4000] + "..."
-
-        # Create a link to the Archives of Nethys page
-        aon_id = weapon.get('aonId')
-        if aon_id:
-            link = f"https://2e.aonprd.com/Weapons.aspx?ID={aon_id}"
-        else:
-            # Fallback to a search link if no ID is present
-            encoded_name = quote_plus(weapon.get('name', weapon_name))
-            link = f"https://2e.aonprd.com/Search.aspx?q={encoded_name}"
         
-        description += f"\n\n[View on Archives of Nethys]({link})"
+        # --- PART 1: The "Webservice" - Displaying the raw data ---
+        raw_data_string = json.dumps(weapon, indent=2)
+        description = f"**SUCCESS!** The 'webservice' part is working. Here is the raw data it fetched.\n\nPlease copy the text in the code block and paste it back to me so we can build the 'organizer'.\n\n```json\n{raw_data_string}\n```"
+        if len(description) > 4000:
+             description = description[:4000] + "...```"
 
-        # Build a simple embed with the available data
         embed = {
-            "title": weapon.get('name', 'Unknown Weapon'),
+            "title": f"Raw Data for: {weapon.get('name', 'Unknown')}",
             "description": description,
-            "footer": {"text": f"Source: {weapon.get('source', 'N/A')} | Archives of Nethys"}
+            "color": 0x00FF00 # Green
         }
-
-        sanitized_name = re.sub(r'[^a-zA-Z0-9]', '', weapon.get('name', 'Fallback'))
-        embed["thumbnail"] = {"url": f"https://2e.aonprd.com/Images/Weapons/{sanitized_name}.webp"}
-
         return embed
         
     except asyncio.TimeoutError:
@@ -103,12 +87,8 @@ async def search_weapon(weapon_name):
             "color": 0xFF0000
         }
     except Exception as e:
-        logging.exception("An unexpected error occurred in search_weapon")
-        return {
-            "title": "Error",
-            "description": f"An unexpected error occurred: `{type(e).__name__}: {e}`",
-            "color": 0xFF0000
-        }
+        # If this part fails, the "webservice" itself has an issue.
+        return {"title": "PART 1 FAILED: 'Webservice' Error", "description": f"Could not fetch data from Archives of Nethys.\n`{type(e).__name__}: {e}`", "color": 0xFF0000}
 
 def clean_html(text):
     """Remove HTML tags and unescape entities"""
