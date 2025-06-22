@@ -72,6 +72,29 @@ async def search_weapon(weapon_name):
         if aon_id:
             link = f"https://2e.aonprd.com/Weapons.aspx?ID={aon_id}"
 
+        # --- Traits ---
+        traits_data = weapon.get("traits") or {}
+        traits = traits_data.get("value", [])
+        trait_text = ""
+        if traits:
+            # Handle Versatile trait specially for clarity
+            for trait in traits:
+                if trait.startswith("versatile-"):
+                    letter = trait.split("-")[1].upper()
+                    damage_type_map = {"P": "piercing", "B": "bludgeoning", "S": "slashing"}
+                    alt_type = damage_type_map.get(letter, "unknown")
+                    
+                    base_type = "slashing"
+                    if "piercing" in damage.lower(): base_type = "piercing"
+                    elif "bludgeoning" in damage.lower(): base_type = "bludgeoning"
+                    
+                    trait_text += f"**Versatile ({letter})**: Can be used to deal {alt_type} damage.\n"
+                    break
+            
+            other_traits = " ".join([f"`{t}`" for t in traits if not t.startswith("versatile-")])
+            if other_traits:
+                trait_text += other_traits
+
         # --- Build Final Embed ---
         embed = {
             "title": weapon.get('name', 'Unknown Weapon'),
@@ -96,6 +119,14 @@ async def search_weapon(weapon_name):
             ],
             "footer": {"text": f"Source: {source} | Archives of Nethys"}
         }
+
+        if trait_text:
+            embed["fields"].append({
+                "name": "Traits",
+                "value": trait_text,
+                "inline": False
+            })
+            
         return embed
 
     except Exception as e:
