@@ -3,16 +3,14 @@ import re
 from html import unescape
 import logging
 import asyncio
-import json
 from urllib.parse import quote, quote_plus
 
 async def search_weapon(weapon_name):
     """Search for a weapon on Archives of Nethys and return Discord embed"""
-    
+
     url = "https://elasticsearch.aonprd.com/aon/_search"
     timeout = aiohttp.ClientTimeout(total=10)
-    
-    # Try exact match first
+
     query = {
         "query": {
             "bool": {
@@ -24,78 +22,86 @@ async def search_weapon(weapon_name):
         },
         "size": 1
     }
-    
+
     try:
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.post(url, json=query) as response:
                 response.raise_for_status()
                 data = await response.json()
-            
-            # If no exact match, try fuzzy search
+
             if not data.get("hits", {}).get("hits"):
-                query = {
-                    "query": {
-                        "bool": {
-                            "must": [
-                                {"term": {"category": "weapon"}},
-                                {"match": {"name": weapon_name}}
-                            ]
-                        }
-                    },
-                    "size": 1
-                }
+                query["query"]["bool"]["must"][1] = {"match": {"name": weapon_name}}
                 async with session.post(url, json=query) as response:
                     response.raise_for_status()
                     data = await response.json()
-        
-        # Check if we got results
+
         hits = data.get("hits", {}).get("hits", [])
         if not hits:
-            return {
-                "title": "Weapon Not Found",
-                "description": f"No weapon matching '{weapon_name}' found on the Archives of Nethys.",
-                "color": 0xFFAD00 # Amber
-            }
-        
-        weapon = hits[0]["_source"]
-        
-        # --- PART 1: The "Webservice" - Displaying the raw data ---
-        raw_data_string = json.dumps(weapon, indent=2)
-        description = f"**SUCCESS!** The 'webservice' part is working. Here is the raw data it fetched.\n\nPlease copy the text in the code block and paste it back to me so we can build the 'organizer'.\n\n```json\n{raw_data_string}\n```"
-        if len(description) > 4000:
-             description = description[:4000] + "...```"
+            return {"title": "Weapon Not Found", "description": f"No weapon matching '{weapon_name}' found.", "color": 0xFFAD00}
 
+        weapon = hits[0]["_source"]
+        full_text = clean_html(weapon.get("text", ""))
+
+        # --- NEW PARSING LOGIC BASED ON PROVIDED DATA ---
+        description_flavor = ""
+        metadata_block = full_text
+        if "---" in full_text:
+            parts = full_text.split("---", 1)
+            metadata_block = parts[0]
+            flavor_text_raw = parts[1].strip()
+            description_flavor = flavor_text_raw.split("Critical Specialization Effects")[0].strip()
+
+        def extract(pattern, text, default="N/A"):
+            match = re.search(pattern, text, re.IGNORECASE)
+            return " ".join(match.group(1).strip().split()) if match else default
+
+        price = extract(r"Price\s(.*?)\s*Damage", metadata_block)
+        damage = extract(r"Damage\s(.*?)\s*Bulk", metadata_block)
+        bulk = extract(r"Bulk\s(.*?)\s*Hands", metadata_block)
+        hands = extract(r"Hands\s(.*?)\s*Type", metadata_block)
+        weapon_type = extract(r"Type\s(.*?)\s*Category", metadata_block)
+        category = extract(r"Category\s(.*?)\s*Group", metadata_block)
+        group = extract(r"Group\s(.*)", metadata_block)
+        
+        source_data = weapon.get('source', 'N/A')
+        source = source_data[0] if isinstance(source_data, list) else source_data
+        level = weapon.get('level', 0)
+
+        aon_id = weapon.get('aonId')
+        link = f"https://2e.aonprd.com/Search.aspx?q={quote_plus(weapon.get('name', ''))}"
+        if aon_id:
+            link = f"https://2e.aonprd.com/Weapons.aspx?ID={aon_id}"
+
+        # --- Build Final Embed ---
         embed = {
-            "title": f"Raw Data for: {weapon.get('name', 'Unknown')}",
-            "description": description,
-            "color": 0x00FF00 # Green
+            "title": weapon.get('name', 'Unknown Weapon'),
+            "url": link,
+            "description": description_flavor,
+            "fields": [
+                {
+                    "name": "Properties",
+                    "value": f"**Price**: {price}\n**Level**: {level}\n**Bulk**: {bulk}",
+                    "inline": True
+                },
+                {
+                    "name": "Combat",
+                    "value": f"**Damage**: {damage}\n**Hands**: {hands}",
+                    "inline": True
+                },
+                {
+                    "name": "Classification",
+                    "value": f"**Type**: {weapon_type}\n**Category**: {category}\n**Group**: {group}",
+                    "inline": True
+                }
+            ],
+            "footer": {"text": f"Source: {source} | Archives of Nethys"}
         }
         return embed
-        
-    except asyncio.TimeoutError:
-        logging.warning("AON API request timed out.")
-        return {
-            "title": "Error: Request Timed Out",
-            "description": "The request to the Archives of Nethys took too long to respond. The site may be slow or down.",
-            "color": 0xFFAD00 # Amber
-        }
-    except aiohttp.ClientResponseError as e:
-        logging.error(f"AON API request failed: {e}")
-        return {
-            "title": "Error: Archives of Nethys API",
-            "description": f"The API request to Archives of Nethys failed with status: {e.status}",
-            "color": 0xFF0000
-        }
+
     except Exception as e:
-        # If this part fails, the "webservice" itself has an issue.
-        return {"title": "PART 1 FAILED: 'Webservice' Error", "description": f"Could not fetch data from Archives of Nethys.\n`{type(e).__name__}: {e}`", "color": 0xFF0000}
+        logging.exception("An error occurred in search_weapon")
+        return {"title": "Error", "description": f"An unexpected error occurred: {type(e).__name__}", "color": 0xFF0000}
 
 def clean_html(text):
-    """Remove HTML tags and unescape entities"""
-    # Convert <br> to newlines
-    text = text.replace("<br>", "\n").replace("<br/>", "\n").replace("<br />", "\n")
-    # Remove all other HTML tags
     text = re.sub(r'<[^>]+>', '', text)
-    # Unescape HTML entities
-    text = unescape(text)
-    return text.strip()
+    return unescape(text).strip()
